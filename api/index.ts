@@ -231,15 +231,20 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     // 3. Find or Create "AI_WP" Calendar
     let calendarId = '';
     try {
-      const calendarList = await calendar.calendarList.list();
+      // Use a larger maxResults to ensure we find it
+      const calendarList = await calendar.calendarList.list({ maxResults: 250 });
       const aiWpCalendar = calendarList.data.items?.find(c => c.summary === 'AI_WP');
+      
       if (aiWpCalendar) {
         calendarId = aiWpCalendar.id!;
+        console.log('Found existing AI_WP calendar:', calendarId);
       } else {
+        console.log('AI_WP calendar not found, creating new one...');
         const newCalendar = await calendar.calendars.insert({
           requestBody: { summary: 'AI_WP', timeZone: 'Asia/Bangkok' }
         });
         calendarId = newCalendar.data.id!;
+        console.log('Created new AI_WP calendar:', calendarId);
       }
     } catch (err: any) {
       console.error('Error finding/creating AI_WP calendar:', err);
@@ -267,6 +272,17 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           }
         }
 
+        // Handle Thai Year (BE) -> AD conversion
+        // If year is > 2400, it's likely BE
+        const yearMatch = formatted.match(/^(\d{4})/);
+        if (yearMatch) {
+          const year = parseInt(yearMatch[1], 10);
+          if (year > 2400) {
+            const adYear = year - 543;
+            formatted = adYear + formatted.substring(4);
+          }
+        }
+
         const d = new Date(formatted);
         if (isNaN(d.getTime())) {
           console.error(`Invalid date generated: ${formatted} from input: ${dt}`);
@@ -289,15 +305,28 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       // Prepare Sheet Row
       const now = new Date();
       const timestamp = now.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+      
+      const splitStart = (eventData.startTime || '').split(' ');
+      const startDate = splitStart[0] || '';
+      const startTimeOnly = splitStart[1] || '';
+
+      const splitEnd = (eventData.endTime || '').split(' ');
+      const endDate = splitEnd[0] || '';
+      const endTimeOnly = splitEnd[1] || '';
+
       sheetRows.push([
-        timestamp,
-        eventData.requestingUnit,
-        finalWpNumber,
-        eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน',
-        eventData.workDescription,
-        eventData.startTime,
-        eventData.endTime,
-        eventData.department
+        timestamp, // A
+        eventData.requestingUnit, // B
+        finalWpNumber, // C
+        eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน', // D
+        eventData.workDescription, // E
+        eventData.stationName, // F
+        eventData.date, // G
+        startDate, // H
+        startTimeOnly, // I
+        endDate, // J
+        endTimeOnly, // K
+        eventData.department || 'ผจฟ.1' // L
       ]);
 
       if (!startDT || !endDT || !calendarId) {
@@ -340,7 +369,7 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       try {
         await sheets.spreadsheets.values.append({
           spreadsheetId,
-          range: 'Sheet1!A:H',
+          range: 'Sheet1!A:L',
           valueInputOption: 'USER_ENTERED',
           requestBody: { values: sheetRows }
         });
