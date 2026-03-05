@@ -24,6 +24,11 @@ interface ExtractedData {
   isoDate: string;
   calendarTitle: string;
   isStaffed: boolean;
+  requestingUnit: string;
+  workDescription: string;
+  startTime: string;
+  endTime: string;
+  department: string;
 }
 
 export default function App() {
@@ -31,8 +36,9 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
+  const [nextWp, setNextWp] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [result, setResult] = useState<{ driveLink: string; calendarLink: string } | null>(null);
+  const [result, setResult] = useState<{ driveLink: string; calendarLink: string; sheetLink?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -42,17 +48,29 @@ export default function App() {
     const handleMessage = (event: MessageEvent) => {
       if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
         setIsAuthenticated(true);
+        fetchNextWp();
       }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
+  const fetchNextWp = async () => {
+    try {
+      const res = await fetch('/api/next-wp');
+      const data = await res.json();
+      if (data.nextWp) setNextWp(data.nextWp);
+    } catch (err) {
+      console.error('Failed to fetch next WP', err);
+    }
+  };
+
   const checkAuthStatus = async () => {
     try {
       const res = await fetch('/api/auth/status');
       const data = await res.json();
       setIsAuthenticated(data.isAuthenticated);
+      if (data.isAuthenticated) fetchNextWp();
     } catch (err) {
       console.error('Auth check failed', err);
       setIsAuthenticated(false);
@@ -122,6 +140,11 @@ export default function App() {
                 3. Date of work (Thai format, e.g., 13 ก.พ. 69)
                 4. ISO Date (YYYY-MM-DD)
                 5. Is it staffed (จัดพนักงาน) or unstaffed (ไม่จัดพนักงาน)? Look for keywords like "จัดพนักงาน" or "ไม่จัดพนักงาน". Default to "จัดพนักงาน" if unsure.
+                6. Requesting Unit (หน่วยงานที่ขออนุญาตทำงาน)
+                7. Work Description (งานที่จะทำ)
+                8. Start Date/Time (วันเวลาที่ขออนุญาตเริ่มต้น, format: YYYY-MM-DD HH:mm)
+                9. End Date/Time (วันเวลาที่ขออนุญาตสิ้นสุด, format: YYYY-MM-DD HH:mm)
+                10. Department (แผนก, default to "ผจฟ.1" if not found)
                 
                 Generate a Calendar Title pattern: "[Station Name] ([Staffed Status]) WP ผจฟ.1 No.[WP Number] บำรุงรักษาระบบ SCPS ประจำปี (ผปค.กสฟ.ก3)"
                 
@@ -140,9 +163,14 @@ export default function App() {
               date: { type: Type.STRING },
               isoDate: { type: Type.STRING },
               isStaffed: { type: Type.BOOLEAN },
-              calendarTitle: { type: Type.STRING }
+              calendarTitle: { type: Type.STRING },
+              requestingUnit: { type: Type.STRING },
+              workDescription: { type: Type.STRING },
+              startTime: { type: Type.STRING },
+              endTime: { type: Type.STRING },
+              department: { type: Type.STRING }
             },
-            required: ["wpNumber", "stationName", "date", "isoDate", "isStaffed", "calendarTitle"]
+            required: ["wpNumber", "stationName", "date", "isoDate", "isStaffed", "calendarTitle", "requestingUnit", "workDescription", "startTime", "endTime", "department"]
           }
         }
       });
@@ -169,6 +197,12 @@ export default function App() {
     formData.append('date', extractedData.date);
     formData.append('isoDate', extractedData.isoDate);
     formData.append('calendarTitle', extractedData.calendarTitle);
+    formData.append('requestingUnit', extractedData.requestingUnit);
+    formData.append('workDescription', extractedData.workDescription);
+    formData.append('startTime', extractedData.startTime);
+    formData.append('endTime', extractedData.endTime);
+    formData.append('department', extractedData.department);
+    formData.append('isStaffed', extractedData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน');
 
     try {
       const res = await fetch('/api/process', {
@@ -179,8 +213,10 @@ export default function App() {
       if (data.success) {
         setResult({
           driveLink: data.driveFile.webViewLink,
-          calendarLink: data.calendarEvent.htmlLink
+          calendarLink: data.calendarEvent.htmlLink,
+          sheetLink: data.sheetLink
         });
+        fetchNextWp(); // Refresh for the next upload
       } else {
         setError(data.error || 'Processing failed');
       }
@@ -272,18 +308,27 @@ export default function App() {
           <AnimatePresence mode="wait">
             {error && (
               <motion.div 
+                key="error-message"
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
                 className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-start gap-3 text-red-700"
               >
                 <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                <p className="text-sm font-medium">{error}</p>
+                <div className="text-sm font-medium">
+                  <p>{error}</p>
+                  {error.includes('Google Calendar API') && (
+                    <p className="mt-2 text-xs opacity-80">
+                      Please enable the Google Calendar API in your Google Cloud Console.
+                    </p>
+                  )}
+                </div>
               </motion.div>
             )}
 
             {extractedData && !result && (
               <motion.div 
+                key="extraction-result"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="bg-white border border-stone-200 rounded-3xl overflow-hidden shadow-sm"
@@ -305,7 +350,12 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-8">
                     <div>
                       <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">WP Number</label>
-                      <p className="font-mono text-lg font-medium">{extractedData.wpNumber}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-mono text-lg font-medium">{nextWp || extractedData.wpNumber}</p>
+                        {nextWp && (
+                          <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">Auto-Increment</span>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Date</label>
@@ -315,19 +365,35 @@ export default function App() {
                       <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Station Name</label>
                       <p className="text-lg font-medium">{extractedData.stationName}</p>
                     </div>
+                    <div className="col-span-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Requesting Unit</label>
+                      <p className="text-lg font-medium">{extractedData.requestingUnit}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Work Description</label>
+                      <p className="text-lg font-medium">{extractedData.workDescription}</p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Start Time</label>
+                      <p className="text-sm font-medium">{extractedData.startTime}</p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">End Time</label>
+                      <p className="text-sm font-medium">{extractedData.endTime}</p>
+                    </div>
                   </div>
 
                   <div className="space-y-4 pt-4 border-t border-stone-100">
                     <div>
                       <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">New File Name Pattern</label>
                       <div className="bg-stone-50 p-3 rounded-xl text-sm font-mono text-stone-600 break-all">
-                        WP ผจฟ.1 No.{extractedData.wpNumber} กสฟ.(ก3) เข้า {extractedData.stationName} ({extractedData.date})
+                        WP ผจฟ.1 No.{nextWp || extractedData.wpNumber} กสฟ.(ก3) เข้า {extractedData.stationName} ({extractedData.date})
                       </div>
                     </div>
                     <div>
                       <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Calendar Title Pattern</label>
                       <div className="bg-stone-50 p-3 rounded-xl text-sm font-mono text-stone-600 break-all">
-                        {extractedData.calendarTitle}
+                        {extractedData.calendarTitle.replace(extractedData.wpNumber, nextWp || extractedData.wpNumber)}
                       </div>
                     </div>
                   </div>
@@ -365,6 +431,7 @@ export default function App() {
 
             {result && (
               <motion.div 
+                key="automation-success"
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 className="bg-emerald-600 text-white rounded-3xl p-10 shadow-xl shadow-emerald-200"
@@ -404,6 +471,20 @@ export default function App() {
                     </div>
                     <span className="font-bold">View in Calendar</span>
                   </a>
+                  {result.sheetLink && (
+                    <a 
+                      href={result.sheetLink} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="bg-white/10 hover:bg-white/20 border border-white/20 p-6 rounded-2xl transition-all flex flex-col gap-2 group sm:col-span-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <FileText className="w-5 h-5 text-emerald-200" />
+                        <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </div>
+                      <span className="font-bold">View in Google Sheets</span>
+                    </a>
+                  )}
                 </div>
 
                 <button 
@@ -420,15 +501,30 @@ export default function App() {
 
       {/* Footer */}
       <footer className="max-w-5xl mx-auto px-6 py-12 border-t border-stone-200 mt-12">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-          <p className="text-stone-400 text-sm">
-            © {new Date().getFullYear()} WP Automation Tool. Built with Gemini AI.
-          </p>
-          <div className="flex items-center gap-6 text-stone-400 text-sm font-medium">
-            <span className="flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              System Active
-            </span>
+        <div className="flex flex-col gap-8">
+          {!isAuthenticated && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-amber-800 text-sm">
+              <h4 className="font-bold mb-2 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                Google OAuth Setup Required
+              </h4>
+              <p className="mb-4">If you see "redirect_uri_mismatch", please add this exact URL to your Google Cloud Console "Authorized redirect URIs":</p>
+              <div className="bg-white border border-amber-200 p-3 rounded-xl font-mono break-all select-all">
+                {window.location.origin}/auth/callback
+              </div>
+            </div>
+          )}
+          
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+            <p className="text-stone-400 text-sm">
+              © {new Date().getFullYear()} WP Automation Tool. Built with Gemini AI.
+            </p>
+            <div className="flex items-center gap-6 text-stone-400 text-sm font-medium">
+              <span className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                System Active
+              </span>
+            </div>
           </div>
         </div>
       </footer>
