@@ -17,7 +17,7 @@ import { motion, AnimatePresence } from 'motion/react';
 // Initialize Gemini
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-interface ExtractedData {
+interface ExtractedEvent {
   wpNumber: string;
   stationName: string;
   date: string;
@@ -29,6 +29,10 @@ interface ExtractedData {
   startTime: string;
   endTime: string;
   department: string;
+}
+
+interface ExtractedData {
+  events: ExtractedEvent[];
 }
 
 export default function App() {
@@ -133,8 +137,10 @@ export default function App() {
                 }
               },
               {
-                text: `Extract information from this Work Permit (WP) document for a Thai electrical substation.
-                Find:
+                text: `Extract information from this Work Permit (WP) document for Thai electrical substations.
+                The document may contain multiple pages, and each page or section might represent a different work permit or station entry.
+                
+                For EACH entry found, extract:
                 1. WP Number (e.g., 013-69)
                 2. Station Name (e.g., สถานีไฟฟ้ากระทุ่มแบน 6)
                 3. Date of work (Thai format, e.g., 13 ก.พ. 69)
@@ -146,9 +152,9 @@ export default function App() {
                 9. End Date/Time (วันเวลาที่ขออนุญาตสิ้นสุด, format: YYYY-MM-DD HH:mm)
                 10. Department (แผนก, default to "ผจฟ.1" if not found)
                 
-                Generate a Calendar Title pattern: "[Station Name] ([Staffed Status]) WP ผจฟ.1 No.[WP Number] บำรุงรักษาระบบ SCPS ประจำปี (ผปค.กสฟ.ก3)"
+                Generate a Calendar Title pattern for each: "[Station Name] ([Staffed Status]) WP ผจฟ.1 No.[WP Number] บำรุงรักษาระบบ SCPS ประจำปี (ผปค.กสฟ.ก3)"
                 
-                Return JSON only.`
+                Return a JSON object with an "events" array containing all found entries.`
               }
             ]
           }
@@ -158,19 +164,28 @@ export default function App() {
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              wpNumber: { type: Type.STRING },
-              stationName: { type: Type.STRING },
-              date: { type: Type.STRING },
-              isoDate: { type: Type.STRING },
-              isStaffed: { type: Type.BOOLEAN },
-              calendarTitle: { type: Type.STRING },
-              requestingUnit: { type: Type.STRING },
-              workDescription: { type: Type.STRING },
-              startTime: { type: Type.STRING },
-              endTime: { type: Type.STRING },
-              department: { type: Type.STRING }
+              events: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    wpNumber: { type: Type.STRING },
+                    stationName: { type: Type.STRING },
+                    date: { type: Type.STRING },
+                    isoDate: { type: Type.STRING },
+                    isStaffed: { type: Type.BOOLEAN },
+                    calendarTitle: { type: Type.STRING },
+                    requestingUnit: { type: Type.STRING },
+                    workDescription: { type: Type.STRING },
+                    startTime: { type: Type.STRING },
+                    endTime: { type: Type.STRING },
+                    department: { type: Type.STRING }
+                  },
+                  required: ["wpNumber", "stationName", "date", "isoDate", "isStaffed", "calendarTitle", "requestingUnit", "workDescription", "startTime", "endTime", "department"]
+                }
+              }
             },
-            required: ["wpNumber", "stationName", "date", "isoDate", "isStaffed", "calendarTitle", "requestingUnit", "workDescription", "startTime", "endTime", "department"]
+            required: ["events"]
           }
         }
       });
@@ -186,29 +201,31 @@ export default function App() {
   };
 
   const handleProcess = async () => {
-    if (!file || !extractedData) return;
+    if (!file || !extractedData || extractedData.events.length === 0) return;
     setIsProcessing(true);
     setError(null);
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('wpNumber', extractedData.wpNumber);
-    formData.append('stationName', extractedData.stationName);
-    formData.append('date', extractedData.date);
-    formData.append('isoDate', extractedData.isoDate);
-    formData.append('calendarTitle', extractedData.calendarTitle);
-    formData.append('requestingUnit', extractedData.requestingUnit);
-    formData.append('workDescription', extractedData.workDescription);
-    formData.append('startTime', extractedData.startTime);
-    formData.append('endTime', extractedData.endTime);
-    formData.append('department', extractedData.department);
-    formData.append('isStaffed', extractedData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน');
+    formData.append('events', JSON.stringify(extractedData.events));
 
     try {
       const res = await fetch('/api/process', {
         method: 'POST',
         body: formData
       });
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        try {
+          const errorJson = JSON.parse(errorText);
+          setError(errorJson.error || `Server error: ${res.status}`);
+        } catch {
+          setError(`Server error: ${res.status}. ${errorText.substring(0, 100)}`);
+        }
+        return;
+      }
+
       const data = await res.json();
       if (data.success) {
         setResult({
@@ -218,10 +235,16 @@ export default function App() {
         });
         fetchNextWp(); // Refresh for the next upload
       } else {
-        setError(data.error || 'Processing failed');
+        if (res.status === 403 && data.needsReauth) {
+          setError(data.error);
+          setIsAuthenticated(false); // Force re-login button to show
+        } else {
+          setError(data.error || 'Processing failed');
+        }
       }
-    } catch (err) {
-      setError('Connection error. Please try again.');
+    } catch (err: any) {
+      console.error('Connection error:', err);
+      setError(`Connection error: ${err.message || 'Please try again.'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -326,7 +349,7 @@ export default function App() {
               </motion.div>
             )}
 
-            {extractedData && !result && (
+            {extractedData && extractedData.events.length > 0 && !result && (
               <motion.div 
                 key="extraction-result"
                 initial={{ opacity: 0, y: 20 }}
@@ -336,7 +359,7 @@ export default function App() {
                 <div className="p-6 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between">
                   <h3 className="font-bold flex items-center gap-2">
                     <FileText className="w-4 h-4 text-emerald-600" />
-                    Extracted Information
+                    Extracted Information ({extractedData.events.length} entries found)
                   </h3>
                   <button 
                     onClick={() => extractData(file!)}
@@ -346,85 +369,78 @@ export default function App() {
                     <RefreshCw className="w-4 h-4" />
                   </button>
                 </div>
-                <div className="p-8 space-y-6">
-                  <div className="grid grid-cols-2 gap-8">
-                    <div>
-                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">WP Number</label>
-                      <div className="flex items-center gap-2">
-                        <p className="font-mono text-lg font-medium">{nextWp || extractedData.wpNumber}</p>
-                        {nextWp && (
-                          <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">Auto-Increment</span>
+                <div className="p-8 space-y-8">
+                  {extractedData.events.map((event, idx) => (
+                    <div key={idx} className={`space-y-6 ${idx !== 0 ? 'pt-8 border-t border-stone-100' : ''}`}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-[10px] font-bold text-stone-500">
+                          {idx + 1}
+                        </span>
+                        <h4 className="font-bold text-stone-700">Entry: {event.stationName}</h4>
+                      </div>
+                      <div className="grid grid-cols-2 gap-8">
+                        <div>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">WP Number</label>
+                          <div className="flex items-center gap-2">
+                            <p className="font-mono text-lg font-medium">{idx === 0 && nextWp ? nextWp : event.wpNumber}</p>
+                            {idx === 0 && nextWp && (
+                              <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">Auto-Increment</span>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Date</label>
+                          <p className="text-lg font-medium">{event.date}</p>
+                        </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Station Name</label>
+                          <p className="text-lg font-medium">{event.stationName}</p>
+                        </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Work Description</label>
+                          <p className="text-lg font-medium">{event.workDescription}</p>
+                        </div>
+                        <div>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Start Time</label>
+                          <p className="text-sm font-medium">{event.startTime}</p>
+                        </div>
+                        <div>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">End Time</label>
+                          <p className="text-sm font-medium">{event.endTime}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="pt-4 border-t border-stone-100">
+                    {!isAuthenticated ? (
+                      <button 
+                        onClick={handleLogin}
+                        className="w-full bg-stone-900 text-white py-4 rounded-2xl font-bold hover:bg-stone-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-stone-200 active:scale-[0.98]"
+                      >
+                        <Calendar className="w-5 h-5" />
+                        Connect Google to Continue
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={handleProcess}
+                        disabled={isProcessing}
+                        className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-emerald-100 active:scale-[0.98]"
+                      >
+                        {isProcessing ? (
+                          <>
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                            Processing {extractedData.events.length} entries...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-5 h-5" />
+                            Confirm & Automate All
+                          </>
                         )}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Date</label>
-                      <p className="text-lg font-medium">{extractedData.date}</p>
-                    </div>
-                    <div className="col-span-2">
-                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Station Name</label>
-                      <p className="text-lg font-medium">{extractedData.stationName}</p>
-                    </div>
-                    <div className="col-span-2">
-                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Requesting Unit</label>
-                      <p className="text-lg font-medium">{extractedData.requestingUnit}</p>
-                    </div>
-                    <div className="col-span-2">
-                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Work Description</label>
-                      <p className="text-lg font-medium">{extractedData.workDescription}</p>
-                    </div>
-                    <div>
-                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Start Time</label>
-                      <p className="text-sm font-medium">{extractedData.startTime}</p>
-                    </div>
-                    <div>
-                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">End Time</label>
-                      <p className="text-sm font-medium">{extractedData.endTime}</p>
-                    </div>
+                      </button>
+                    )}
                   </div>
-
-                  <div className="space-y-4 pt-4 border-t border-stone-100">
-                    <div>
-                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">New File Name Pattern</label>
-                      <div className="bg-stone-50 p-3 rounded-xl text-sm font-mono text-stone-600 break-all">
-                        WP ผจฟ.1 No.{nextWp || extractedData.wpNumber} กสฟ.(ก3) เข้า {extractedData.stationName} ({extractedData.date})
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Calendar Title Pattern</label>
-                      <div className="bg-stone-50 p-3 rounded-xl text-sm font-mono text-stone-600 break-all">
-                        {extractedData.calendarTitle.replace(extractedData.wpNumber, nextWp || extractedData.wpNumber)}
-                      </div>
-                    </div>
-                  </div>
-
-                  {!isAuthenticated ? (
-                    <button 
-                      onClick={handleLogin}
-                      className="w-full bg-stone-900 text-white py-4 rounded-2xl font-bold hover:bg-stone-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-stone-200 active:scale-[0.98]"
-                    >
-                      <Calendar className="w-5 h-5" />
-                      Connect Google to Continue
-                    </button>
-                  ) : (
-                    <button 
-                      onClick={handleProcess}
-                      disabled={isProcessing}
-                      className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-emerald-100 active:scale-[0.98]"
-                    >
-                      {isProcessing ? (
-                        <>
-                          <Loader2 className="w-5 h-5 animate-spin" />
-                          Processing...
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle2 className="w-5 h-5" />
-                          Confirm & Automate
-                        </>
-                      )}
-                    </button>
-                  )}
                 </div>
               </motion.div>
             )}

@@ -14,9 +14,13 @@ if (!fs.existsSync('uploads')) {
   fs.mkdirSync('uploads');
 }
 
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ 
+  dest: 'uploads/',
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
+});
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
 
 // Google OAuth Configuration
@@ -25,11 +29,22 @@ const getRedirectUri = () => {
   return `${baseUrl}/auth/callback`;
 };
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  getRedirectUri()
-);
+const getOAuth2Client = () => {
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET;
+  
+  if (!clientId || !clientSecret) {
+    console.error('MISSING GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in environment variables');
+  }
+
+  return new google.auth.OAuth2(
+    clientId,
+    clientSecret,
+    getRedirectUri()
+  );
+};
+
+const oauth2Client = getOAuth2Client();
 
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
@@ -96,7 +111,7 @@ app.get('/api/next-wp', async (req, res) => {
   if (!tokens) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    const auth = new google.auth.OAuth2();
+    const auth = getOAuth2Client();
     auth.setCredentials(JSON.parse(tokens));
     const sheets = google.sheets({ version: 'v4', auth });
     const spreadsheetId = process.env.GOOGLE_SHEET_ID;
@@ -135,133 +150,199 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
   const tokens = req.cookies.google_tokens;
   if (!tokens) return res.status(401).json({ error: 'Not authenticated' });
 
-  const { wpNumber, stationName, date, calendarTitle } = req.body;
   const file = req.file;
-
   if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
+  let events = [];
   try {
-    const auth = new google.auth.OAuth2();
+    events = JSON.parse(req.body.events || '[]');
+  } catch (e) {
+    return res.status(400).json({ error: 'Invalid events data' });
+  }
+
+  if (events.length === 0) return res.status(400).json({ error: 'No events to process' });
+
+  try {
+    const auth = getOAuth2Client();
     auth.setCredentials(JSON.parse(tokens));
 
     const drive = google.drive({ version: 'v3', auth });
     const calendar = google.calendar({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // 1. Upload to Google Drive
-    const newFileName = `WP ผจฟ.1 No.${wpNumber} กสฟ.(ก3) เข้า ${stationName} (${date})`;
+    // 1. Upload to Google Drive (Original File)
+    const firstEvent = events[0];
+    const driveFileName = `WP ผจฟ.1 (Multi-Entry) เข้า ${firstEvent.stationName} (${firstEvent.date})`;
     
-    const driveResponse = await drive.files.create({
-      requestBody: {
-        name: newFileName,
-        parents: ['1aDRqNGcl934p1wzyuFsxd3bdX6PF6CD2'], 
-      },
-      media: {
-        mimeType: file.mimetype,
-        body: fs.createReadStream(file.path),
-      },
-      fields: 'id, name, webViewLink',
-    });
+    let driveResponse;
+    try {
+      driveResponse = await drive.files.create({
+        requestBody: {
+          name: driveFileName,
+          parents: ['1aDRqNGcl934p1wzyuFsxd3bdX6PF6CD2'], 
+        },
+        media: {
+          mimeType: file.mimetype,
+          body: fs.createReadStream(file.path),
+        },
+        fields: 'id, name, webViewLink',
+      });
+    } catch (driveErr: any) {
+      console.error('Error uploading to specific folder, trying root:', driveErr);
+      driveResponse = await drive.files.create({
+        requestBody: { name: driveFileName },
+        media: {
+          mimeType: file.mimetype,
+          body: fs.createReadStream(file.path),
+        },
+        fields: 'id, name, webViewLink',
+      });
+    }
 
     // 2. Find or Create "AI_WP" Calendar
     let calendarId = 'primary';
     try {
       const calendarList = await calendar.calendarList.list();
       const aiWpCalendar = calendarList.data.items?.find(c => c.summary === 'AI_WP');
-      
       if (aiWpCalendar) {
         calendarId = aiWpCalendar.id!;
       } else {
         const newCalendar = await calendar.calendars.insert({
-          requestBody: {
-            summary: 'AI_WP',
-            timeZone: 'Asia/Bangkok'
-          }
+          requestBody: { summary: 'AI_WP', timeZone: 'Asia/Bangkok' }
         });
         calendarId = newCalendar.data.id!;
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error finding/creating AI_WP calendar:', err);
-      // Fallback to primary if error
+      if (err.message?.includes('insufficient authentication scopes')) {
+        return res.status(403).json({ 
+          error: 'Insufficient permissions for Google Calendar. Please sign out and sign in again to grant required permissions.',
+          needsReauth: true
+        });
+      }
+      // Fallback to primary if other error
     }
 
-    // 3. Create Calendar Event
-    const isoDate = req.body.isoDate || new Date().toISOString().split('T')[0];
-    const startTime = req.body.startTime || `${isoDate}T08:00:00`;
-    const endTime = req.body.endTime || `${isoDate}T17:00:00`;
-
-    const event = {
-      summary: calendarTitle,
-      description: `Automated entry for ${newFileName}\nWork: ${req.body.workDescription}\nUnit: ${req.body.requestingUnit}`,
-      start: {
-        dateTime: startTime.includes('T') ? startTime : `${startTime}:00`,
-        timeZone: 'Asia/Bangkok',
-      },
-      end: {
-        dateTime: endTime.includes('T') ? endTime : `${endTime}:00`,
-        timeZone: 'Asia/Bangkok',
-      },
+    const formatDateTime = (dt: string) => {
+      if (!dt) return null;
+      // Basic validation for YYYY-MM-DD HH:mm or similar
+      let formatted = dt.replace(' ', 'T');
+      if (!formatted.includes('T')) {
+        // If only date is provided, add default time
+        formatted += 'T08:00:00';
+      }
+      const timePart = formatted.split('T')[1];
+      if (timePart && timePart.split(':').length === 2) {
+        formatted += ':00';
+      }
+      
+      // Final check if it's a valid ISO string
+      try {
+        const d = new Date(formatted);
+        if (isNaN(d.getTime())) return null;
+        return formatted;
+      } catch {
+        return null;
+      }
     };
 
-    const calendarResponse = await calendar.events.insert({
-      calendarId: calendarId,
-      requestBody: event,
-    });
-
-    // 4. Write to Google Sheet
-    let sheetLink = '';
     const spreadsheetId = process.env.GOOGLE_SHEET_ID;
-    let finalWpNumber = wpNumber;
+    const processedEvents = [];
+    const sheetRows = [];
+
+    // Get initial WP number if sheet exists
+    let currentWpNum = 0;
+    let currentYearBE = (new Date().getFullYear() + 543) % 100;
+    const yearStr = currentYearBE.toString().padStart(2, '0');
 
     if (spreadsheetId) {
       try {
-        // Get the last WP number to calculate the next one
         const sheetData = await sheets.spreadsheets.values.get({
           spreadsheetId,
           range: 'Sheet1!C:C',
         });
-        
         const rows = sheetData.data.values || [];
         const lastWp = rows.length > 0 ? rows[rows.length - 1][0] : null;
-        
-        const now = new Date();
-        const currentYearBE = (now.getFullYear() + 543) % 100;
-        const yearStr = currentYearBE.toString().padStart(2, '0');
-
         if (lastWp && typeof lastWp === 'string' && lastWp.includes('-')) {
           const [numPart, yearPart] = lastWp.split('-');
-          const lastNum = parseInt(numPart, 10);
-          const lastYear = parseInt(yearPart, 10);
-
-          if (lastYear === currentYearBE) {
-            finalWpNumber = `${(lastNum + 1).toString().padStart(3, '0')}-${yearStr}`;
-          } else {
-            finalWpNumber = `001-${yearStr}`;
+          if (parseInt(yearPart, 10) === currentYearBE) {
+            currentWpNum = parseInt(numPart, 10);
           }
-        } else {
-          // Fallback if sheet is empty or format is wrong
-          finalWpNumber = `001-${yearStr}`;
         }
+      } catch (e: any) {
+        console.error('Error fetching next WP for multi-process:', e.message);
+        if (e.message?.includes('Requested entity was not found')) {
+          console.warn('Sheet "Sheet1" not found or spreadsheet ID invalid. Skipping WP auto-increment from sheet.');
+        }
+      }
+    }
 
+    // 3. Loop through events
+    for (const eventData of events) {
+      currentWpNum++;
+      const finalWpNumber = `${currentWpNum.toString().padStart(3, '0')}-${yearStr}`;
+      
+      const startDT = formatDateTime(eventData.startTime);
+      const endDT = formatDateTime(eventData.endTime);
+
+      if (!startDT || !endDT) {
+        console.warn(`Invalid date/time for event: ${eventData.stationName}. Skipping calendar entry.`);
+        continue;
+      }
+
+      // Create Calendar Event
+      const calendarEvent = {
+        summary: eventData.calendarTitle.replace(eventData.wpNumber, finalWpNumber),
+        description: `Automated entry for WP No.${finalWpNumber}\nStation: ${eventData.stationName}\nWork: ${eventData.workDescription}\nUnit: ${eventData.requestingUnit}\nFile: ${driveResponse.data.webViewLink}`,
+        start: {
+          dateTime: startDT,
+          timeZone: 'Asia/Bangkok',
+        },
+        end: {
+          dateTime: endDT,
+          timeZone: 'Asia/Bangkok',
+        },
+      };
+
+      try {
+        const calRes = await calendar.events.insert({
+          calendarId: calendarId,
+          requestBody: calendarEvent,
+        });
+
+        processedEvents.push({
+          wpNumber: finalWpNumber,
+          calendarLink: calRes.data.htmlLink
+        });
+
+        // Prepare Sheet Row
+        const now = new Date();
         const timestamp = now.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-        const values = [
-          [
-            timestamp, // Column A: Upload Date/Time
-            req.body.requestingUnit, // Column B: Requesting Unit
-            finalWpNumber, // Column C: Run Number (Calculated)
-            req.body.isStaffed, // Column D: Staffed/Unstaffed
-            req.body.workDescription, // Column E: Work Description
-            req.body.startTime, // Column F: Start Date/Time
-            req.body.endTime, // Column G: End Date/Time
-            req.body.department // Column H: Department
-          ]
-        ];
+        sheetRows.push([
+          timestamp,
+          eventData.requestingUnit,
+          finalWpNumber,
+          eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน',
+          eventData.workDescription,
+          eventData.startTime,
+          eventData.endTime,
+          eventData.department
+        ]);
+      } catch (calErr: any) {
+        console.error(`Error creating calendar event for ${eventData.stationName}:`, calErr.message);
+        // Continue to next event even if one fails
+      }
+    }
 
+    // 4. Batch Write to Google Sheet
+    let sheetLink = '';
+    if (spreadsheetId && sheetRows.length > 0) {
+      try {
         await sheets.spreadsheets.values.append({
           spreadsheetId,
           range: 'Sheet1!A:H',
           valueInputOption: 'USER_ENTERED',
-          requestBody: { values }
+          requestBody: { values: sheetRows }
         });
         sheetLink = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
       } catch (err) {
@@ -269,24 +350,15 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       }
     }
 
-    // Update file name and calendar with the final calculated WP number
-    const finalFileName = `WP ผจฟ.1 No.${finalWpNumber} กสฟ.(ก3) เข้า ${stationName} (${date})`;
-    
-    // Update Drive file name
-    await drive.files.update({
-      fileId: driveResponse.data.id!,
-      requestBody: { name: finalFileName }
-    });
-
     // Cleanup local file
     fs.unlinkSync(file.path);
 
     res.json({
       success: true,
-      driveFile: { ...driveResponse.data, name: finalFileName },
-      calendarEvent: calendarResponse.data,
+      driveFile: driveResponse.data,
+      calendarEvent: { htmlLink: processedEvents[0].calendarLink }, // Return first for UI
       sheetLink: sheetLink,
-      finalWpNumber: finalWpNumber
+      processedCount: events.length
     });
   } catch (error: any) {
     console.error('Processing error:', error);
