@@ -191,14 +191,6 @@ export default function App() {
     }
   };
 
-  if (isAuthenticated === null) {
-    return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-stone-400" />
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-stone-50 text-stone-900 font-sans selection:bg-emerald-100">
       {/* Header */}
@@ -210,141 +202,145 @@ export default function App() {
             </div>
             <h1 className="font-semibold text-lg tracking-tight">WP Automation</h1>
           </div>
-          {isAuthenticated && (
-            <button 
-              onClick={handleLogout}
-              className="flex items-center gap-2 text-sm font-medium text-stone-500 hover:text-stone-900 transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              Sign Out
-            </button>
-          )}
+          <div className="flex items-center gap-4">
+            {isAuthenticated ? (
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full uppercase tracking-wider">
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Connected
+                </span>
+                <button 
+                  onClick={handleLogout}
+                  className="p-2 text-stone-400 hover:text-stone-900 transition-colors rounded-lg hover:bg-stone-100"
+                  title="Sign Out"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <button 
+                onClick={handleLogin}
+                className="flex items-center gap-2 text-sm font-bold text-stone-600 hover:text-stone-900 transition-colors bg-white border border-stone-200 px-4 py-2 rounded-xl shadow-sm hover:shadow-md active:scale-95"
+              >
+                <Calendar className="w-4 h-4" />
+                Connect Google
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
       <main className="max-w-3xl mx-auto px-6 py-12">
-        {!isAuthenticated ? (
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white border border-stone-200 rounded-3xl p-12 text-center shadow-sm"
-          >
-            <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-6">
-              <Calendar className="w-10 h-10 text-emerald-600" />
-            </div>
-            <h2 className="text-3xl font-bold mb-4 tracking-tight">Connect to Google</h2>
-            <p className="text-stone-500 mb-8 max-w-md mx-auto leading-relaxed">
-              We need access to your Google Drive and Calendar to automate your WP workflow.
-            </p>
-            <button 
-              onClick={handleLogin}
-              className="bg-stone-900 text-white px-8 py-4 rounded-2xl font-semibold hover:bg-stone-800 transition-all shadow-lg shadow-stone-200 active:scale-95"
+        <div className="space-y-8">
+          {/* Upload Section */}
+          <section>
+            <div 
+              onClick={() => fileInputRef.current?.click()}
+              className={`
+                border-2 border-dashed rounded-3xl p-12 text-center cursor-pointer transition-all
+                ${file ? 'border-emerald-200 bg-emerald-50/30' : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50/50'}
+              `}
             >
-              Sign in with Google
-            </button>
-          </motion.div>
-        ) : (
-          <div className="space-y-8">
-            {/* Upload Section */}
-            <section>
-              <div 
-                onClick={() => fileInputRef.current?.click()}
-                className={`
-                  border-2 border-dashed rounded-3xl p-12 text-center cursor-pointer transition-all
-                  ${file ? 'border-emerald-200 bg-emerald-50/30' : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50/50'}
-                `}
-              >
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleFileChange} 
-                  className="hidden" 
-                  accept=".pdf,image/*"
-                />
-                <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-stone-100 flex items-center justify-center mx-auto mb-4">
-                  {isExtracting ? (
-                    <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
-                  ) : (
-                    <Upload className="w-8 h-8 text-stone-400" />
-                  )}
-                </div>
-                {file ? (
-                  <div>
-                    <p className="font-semibold text-lg">{file.name}</p>
-                    <p className="text-stone-500 text-sm">Click to change file</p>
-                  </div>
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleFileChange} 
+                className="hidden" 
+                accept=".pdf,image/*"
+              />
+              <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-stone-100 flex items-center justify-center mx-auto mb-4">
+                {isExtracting ? (
+                  <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
                 ) : (
-                  <div>
-                    <p className="font-semibold text-lg">Upload WP Document</p>
-                    <p className="text-stone-500 text-sm">PDF or Image of the Work Permit</p>
-                  </div>
+                  <Upload className="w-8 h-8 text-stone-400" />
                 )}
               </div>
-            </section>
-
-            <AnimatePresence mode="wait">
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-start gap-3 text-red-700"
-                >
-                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                  <p className="text-sm font-medium">{error}</p>
-                </motion.div>
+              {file ? (
+                <div>
+                  <p className="font-semibold text-lg">{file.name}</p>
+                  <p className="text-stone-500 text-sm">Click to change file</p>
+                </div>
+              ) : (
+                <div>
+                  <p className="font-semibold text-lg">Upload WP Document</p>
+                  <p className="text-stone-500 text-sm">PDF or Image of the Work Permit</p>
+                </div>
               )}
+            </div>
+          </section>
 
-              {extractedData && !result && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="bg-white border border-stone-200 rounded-3xl overflow-hidden shadow-sm"
-                >
-                  <div className="p-6 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between">
-                    <h3 className="font-bold flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-emerald-600" />
-                      Extracted Information
-                    </h3>
-                    <button 
-                      onClick={() => extractData(file!)}
-                      className="text-stone-400 hover:text-stone-900 transition-colors"
-                      title="Retry Extraction"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </button>
+          <AnimatePresence mode="wait">
+            {error && (
+              <motion.div 
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-start gap-3 text-red-700"
+              >
+                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                <p className="text-sm font-medium">{error}</p>
+              </motion.div>
+            )}
+
+            {extractedData && !result && (
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white border border-stone-200 rounded-3xl overflow-hidden shadow-sm"
+              >
+                <div className="p-6 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between">
+                  <h3 className="font-bold flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-emerald-600" />
+                    Extracted Information
+                  </h3>
+                  <button 
+                    onClick={() => extractData(file!)}
+                    className="text-stone-400 hover:text-stone-900 transition-colors"
+                    title="Retry Extraction"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="p-8 space-y-6">
+                  <div className="grid grid-cols-2 gap-8">
+                    <div>
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">WP Number</label>
+                      <p className="font-mono text-lg font-medium">{extractedData.wpNumber}</p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Date</label>
+                      <p className="text-lg font-medium">{extractedData.date}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Station Name</label>
+                      <p className="text-lg font-medium">{extractedData.stationName}</p>
+                    </div>
                   </div>
-                  <div className="p-8 space-y-6">
-                    <div className="grid grid-cols-2 gap-8">
-                      <div>
-                        <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">WP Number</label>
-                        <p className="font-mono text-lg font-medium">{extractedData.wpNumber}</p>
-                      </div>
-                      <div>
-                        <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Date</label>
-                        <p className="text-lg font-medium">{extractedData.date}</p>
-                      </div>
-                      <div className="col-span-2">
-                        <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Station Name</label>
-                        <p className="text-lg font-medium">{extractedData.stationName}</p>
+
+                  <div className="space-y-4 pt-4 border-t border-stone-100">
+                    <div>
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">New File Name Pattern</label>
+                      <div className="bg-stone-50 p-3 rounded-xl text-sm font-mono text-stone-600 break-all">
+                        WP ผจฟ.1 No.{extractedData.wpNumber} กสฟ.(ก3) เข้า {extractedData.stationName} ({extractedData.date})
                       </div>
                     </div>
-
-                    <div className="space-y-4 pt-4 border-t border-stone-100">
-                      <div>
-                        <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">New File Name Pattern</label>
-                        <div className="bg-stone-50 p-3 rounded-xl text-sm font-mono text-stone-600 break-all">
-                          WP ผจฟ.1 No.{extractedData.wpNumber} กสฟ.(ก3) เข้า {extractedData.stationName} ({extractedData.date})
-                        </div>
-                      </div>
-                      <div>
-                        <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Calendar Title Pattern</label>
-                        <div className="bg-stone-50 p-3 rounded-xl text-sm font-mono text-stone-600 break-all">
-                          {extractedData.calendarTitle}
-                        </div>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Calendar Title Pattern</label>
+                      <div className="bg-stone-50 p-3 rounded-xl text-sm font-mono text-stone-600 break-all">
+                        {extractedData.calendarTitle}
                       </div>
                     </div>
+                  </div>
 
+                  {!isAuthenticated ? (
+                    <button 
+                      onClick={handleLogin}
+                      className="w-full bg-stone-900 text-white py-4 rounded-2xl font-bold hover:bg-stone-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-stone-200 active:scale-[0.98]"
+                    >
+                      <Calendar className="w-5 h-5" />
+                      Connect Google to Continue
+                    </button>
+                  ) : (
                     <button 
                       onClick={handleProcess}
                       disabled={isProcessing}
@@ -362,64 +358,64 @@ export default function App() {
                         </>
                       )}
                     </button>
-                  </div>
-                </motion.div>
-              )}
+                  )}
+                </div>
+              </motion.div>
+            )}
 
-              {result && (
-                <motion.div 
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="bg-emerald-600 text-white rounded-3xl p-10 shadow-xl shadow-emerald-200"
-                >
-                  <div className="flex items-center gap-4 mb-8">
-                    <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
-                      <CheckCircle2 className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <h3 className="text-2xl font-bold">Automation Complete</h3>
-                      <p className="text-emerald-100">File renamed, uploaded, and calendar event created.</p>
-                    </div>
+            {result && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="bg-emerald-600 text-white rounded-3xl p-10 shadow-xl shadow-emerald-200"
+              >
+                <div className="flex items-center gap-4 mb-8">
+                  <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
+                    <CheckCircle2 className="w-6 h-6" />
                   </div>
-                  
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <a 
-                      href={result.driveLink} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="bg-white/10 hover:bg-white/20 border border-white/20 p-6 rounded-2xl transition-all flex flex-col gap-2 group"
-                    >
-                      <div className="flex items-center justify-between">
-                        <Upload className="w-5 h-5 text-emerald-200" />
-                        <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
-                      </div>
-                      <span className="font-bold">View in Drive</span>
-                    </a>
-                    <a 
-                      href={result.calendarLink} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="bg-white/10 hover:bg-white/20 border border-white/20 p-6 rounded-2xl transition-all flex flex-col gap-2 group"
-                    >
-                      <div className="flex items-center justify-between">
-                        <Calendar className="w-5 h-5 text-emerald-200" />
-                        <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
-                      </div>
-                      <span className="font-bold">View in Calendar</span>
-                    </a>
+                  <div>
+                    <h3 className="text-2xl font-bold">Automation Complete</h3>
+                    <p className="text-emerald-100">File renamed, uploaded, and calendar event created.</p>
                   </div>
-
-                  <button 
-                    onClick={resetState}
-                    className="mt-8 w-full py-4 border border-white/30 rounded-2xl font-bold hover:bg-white/10 transition-all"
+                </div>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <a 
+                    href={result.driveLink} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="bg-white/10 hover:bg-white/20 border border-white/20 p-6 rounded-2xl transition-all flex flex-col gap-2 group"
                   >
-                    Process Another File
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
+                    <div className="flex items-center justify-between">
+                      <Upload className="w-5 h-5 text-emerald-200" />
+                      <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                    <span className="font-bold">View in Drive</span>
+                  </a>
+                  <a 
+                    href={result.calendarLink} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="bg-white/10 hover:bg-white/20 border border-white/20 p-6 rounded-2xl transition-all flex flex-col gap-2 group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <Calendar className="w-5 h-5 text-emerald-200" />
+                      <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                    <span className="font-bold">View in Calendar</span>
+                  </a>
+                </div>
+
+                <button 
+                  onClick={resetState}
+                  className="mt-8 w-full py-4 border border-white/30 rounded-2xl font-bold hover:bg-white/10 transition-all"
+                >
+                  Process Another File
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </main>
 
       {/* Footer */}
