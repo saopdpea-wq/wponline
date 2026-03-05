@@ -351,19 +351,27 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     }
 
     // Cleanup local file
-    fs.unlinkSync(file.path);
+    if (file && fs.existsSync(file.path)) {
+      fs.unlinkSync(file.path);
+    }
 
     res.json({
       success: true,
       driveFile: driveResponse.data,
-      calendarEvent: { htmlLink: processedEvents[0].calendarLink }, // Return first for UI
+      calendarEvent: { htmlLink: processedEvents.length > 0 ? processedEvents[0].calendarLink : null }, // Return first for UI
       sheetLink: sheetLink,
       processedCount: events.length
     });
   } catch (error: any) {
     console.error('Processing error:', error);
-    if (file) fs.unlinkSync(file.path);
-    res.status(500).json({ error: error.message });
+    if (file && fs.existsSync(file.path)) {
+      try {
+        fs.unlinkSync(file.path);
+      } catch (e) {
+        // Ignore unlink errors in catch block
+      }
+    }
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
   }
 });
 

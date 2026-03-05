@@ -62,8 +62,12 @@ export default function App() {
   const fetchNextWp = async () => {
     try {
       const res = await fetch('/api/next-wp');
-      const data = await res.json();
-      if (data.nextWp) setNextWp(data.nextWp);
+      if (!res.ok) return;
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data.nextWp) setNextWp(data.nextWp);
+      }
     } catch (err) {
       console.error('Failed to fetch next WP', err);
     }
@@ -224,6 +228,12 @@ export default function App() {
           setError(`Server error: ${res.status}. ${errorText.substring(0, 100)}`);
         }
         return;
+      }
+
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await res.text();
+        throw new Error(`Server returned non-JSON response: ${text.substring(0, 50)}...`);
       }
 
       const data = await res.json();
