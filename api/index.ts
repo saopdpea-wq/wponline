@@ -300,7 +300,11 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     const sheetRows = [];
     for (const eventData of events) {
       const startDT = formatDateTime(eventData.startTime);
-      const endDT = formatDateTime(eventData.endTime);
+      let endDT = formatDateTime(eventData.endTime);
+
+      if (startDT && !endDT) {
+        endDT = startDT;
+      }
 
       // Prepare Sheet Row
       const now = new Date();
@@ -311,8 +315,12 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       const startTimeOnly = splitStart[1] || '';
 
       const splitEnd = (eventData.endTime || '').split(' ');
-      const endDate = splitEnd[0] || '';
+      let endDate = splitEnd[0] || '';
       const endTimeOnly = splitEnd[1] || '';
+
+      if (!endDate && startDate) {
+        endDate = startDate;
+      }
 
       sheetRows.push([
         timestamp, // A
