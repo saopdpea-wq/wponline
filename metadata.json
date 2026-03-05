@@ -1,0 +1,5 @@
+{
+  "name": "WP Automation Tool",
+  "description": "Automate WP file renaming, Google Drive upload, and Calendar event creation using AI.",
+  "requestFramePermissions": []
+}
