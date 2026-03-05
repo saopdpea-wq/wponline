@@ -10,7 +10,12 @@ import {
   LogOut, 
   ExternalLink,
   RefreshCw,
-  FileCheck
+  FileCheck,
+  Hash,
+  User,
+  Clock,
+  ChevronRight,
+  Table
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -150,7 +155,9 @@ export default function App() {
               },
               {
                 text: `Extract information from this Work Permit (WP) document for Thai electrical substations.
-                The document may contain multiple pages, and each page or section might represent a different work permit or station entry.
+                The document may contain multiple pages, and each page or section might represent a different work entry.
+                
+                IMPORTANT: If the document contains multiple work entries, they MUST ALL share the same WP Number found in the document. Do not generate different WP numbers for different entries within the same file.
                 
                 For EACH entry found, extract:
                 1. WP Number (e.g., 013-69)
@@ -203,10 +210,20 @@ export default function App() {
       });
 
       const data = JSON.parse(response.text || '{}');
+      
+      // Post-process to ensure same WP number if multiple events
+      if (data.events && data.events.length > 1) {
+        const firstWp = data.events[0].wpNumber;
+        data.events = data.events.map((ev: any) => ({
+          ...ev,
+          wpNumber: firstWp
+        }));
+      }
+      
       setExtractedData(data);
     } catch (err: any) {
       console.error('Extraction failed', err);
-      setError('Failed to extract data from file. Please try again or check the file format.');
+      setError('ไม่สามารถสกัดข้อมูลจากไฟล์ได้ กรุณาลองใหม่อีกครั้งหรือตรวจสอบรูปแบบไฟล์');
     } finally {
       setIsExtracting(false);
     }
@@ -277,19 +294,19 @@ export default function App() {
             <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center text-white">
               <FileCheck className="w-5 h-5" />
             </div>
-            <h1 className="font-semibold text-lg tracking-tight">WP Automation</h1>
+            <h1 className="font-semibold text-lg tracking-tight">ระบบจัดการ WP อัตโนมัติ</h1>
           </div>
           <div className="flex items-center gap-4">
             {isAuthenticated ? (
               <div className="flex items-center gap-3">
                 <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full uppercase tracking-wider">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Connected
+                  เชื่อมต่อแล้ว
                 </span>
                 <button 
                   onClick={handleLogout}
                   className="p-2 text-stone-400 hover:text-stone-900 transition-colors rounded-lg hover:bg-stone-100"
-                  title="Sign Out"
+                  title="ออกจากระบบ"
                 >
                   <LogOut className="w-4 h-4" />
                 </button>
@@ -300,7 +317,7 @@ export default function App() {
                 className="flex items-center gap-2 text-sm font-bold text-stone-600 hover:text-stone-900 transition-colors bg-white border border-stone-200 px-4 py-2 rounded-xl shadow-sm hover:shadow-md active:scale-95"
               >
                 <Calendar className="w-4 h-4" />
-                Connect Google
+                เชื่อมต่อ Google
               </button>
             )}
           </div>
@@ -309,6 +326,21 @@ export default function App() {
 
       <main className="max-w-3xl mx-auto px-6 py-12">
         <div className="space-y-8">
+          {/* Next WP Indicator */}
+          {isAuthenticated && nextWp && (
+            <div className="bg-white border border-stone-200 rounded-2xl p-4 flex items-center justify-between shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-stone-100 rounded-xl flex items-center justify-center text-stone-500">
+                  <Hash className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-stone-400 uppercase tracking-wider">เลขที่ WP ถัดไป</p>
+                  <p className="font-mono font-bold text-stone-900">{nextWp}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Upload Section */}
           <section>
             <div 
@@ -335,12 +367,12 @@ export default function App() {
               {file ? (
                 <div>
                   <p className="font-semibold text-lg">{file.name}</p>
-                  <p className="text-stone-500 text-sm">Click to change file</p>
+                  <p className="text-stone-500 text-sm">คลิกเพื่อเปลี่ยนไฟล์</p>
                 </div>
               ) : (
                 <div>
-                  <p className="font-semibold text-lg">Upload WP Document</p>
-                  <p className="text-stone-500 text-sm">PDF or Image of the Work Permit</p>
+                  <p className="font-semibold text-lg">อัปโหลดเอกสาร WP</p>
+                  <p className="text-stone-500 text-sm">ไฟล์ PDF หรือรูปภาพของใบอนุญาตทำงาน</p>
                 </div>
               )}
             </div>
@@ -377,12 +409,12 @@ export default function App() {
                 <div className="p-6 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between">
                   <h3 className="font-bold flex items-center gap-2">
                     <FileText className="w-4 h-4 text-emerald-600" />
-                    Extracted Information ({extractedData.events.length} entries found)
+                    ข้อมูลที่สกัดได้ (พบ {extractedData.events.length} รายการ)
                   </h3>
                   <button 
                     onClick={() => extractData(file!)}
                     className="text-stone-400 hover:text-stone-900 transition-colors"
-                    title="Retry Extraction"
+                    title="ลองใหม่"
                   >
                     <RefreshCw className="w-4 h-4" />
                   </button>
@@ -394,36 +426,36 @@ export default function App() {
                         <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-[10px] font-bold text-stone-500">
                           {idx + 1}
                         </span>
-                        <h4 className="font-bold text-stone-700">Entry: {event.stationName}</h4>
+                        <h4 className="font-bold text-stone-700">รายการ: {event.stationName}</h4>
                       </div>
                       <div className="grid grid-cols-2 gap-8">
                         <div>
-                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">WP Number</label>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">เลขที่ WP</label>
                           <div className="flex items-center gap-2">
-                            <p className="font-mono text-lg font-medium">{idx === 0 && nextWp ? nextWp : event.wpNumber}</p>
-                            {idx === 0 && nextWp && (
-                              <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">Auto-Increment</span>
+                            <p className="font-mono text-lg font-medium">{nextWp ? nextWp : event.wpNumber}</p>
+                            {nextWp && (
+                              <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">รันเลขอัตโนมัติ</span>
                             )}
                           </div>
                         </div>
                         <div>
-                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Date</label>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">วันที่</label>
                           <p className="text-lg font-medium">{event.date}</p>
                         </div>
                         <div className="col-span-2">
-                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Station Name</label>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">ชื่อสถานี</label>
                           <p className="text-lg font-medium">{event.stationName}</p>
                         </div>
                         <div className="col-span-2">
-                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Work Description</label>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">รายละเอียดงาน</label>
                           <p className="text-lg font-medium">{event.workDescription}</p>
                         </div>
                         <div>
-                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">Start Time</label>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">เวลาเริ่ม</label>
                           <p className="text-sm font-medium">{event.startTime}</p>
                         </div>
                         <div>
-                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">End Time</label>
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">เวลาสิ้นสุด</label>
                           <p className="text-sm font-medium">{event.endTime}</p>
                         </div>
                       </div>
@@ -437,7 +469,7 @@ export default function App() {
                         className="w-full bg-stone-900 text-white py-4 rounded-2xl font-bold hover:bg-stone-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-stone-200 active:scale-[0.98]"
                       >
                         <Calendar className="w-5 h-5" />
-                        Connect Google to Continue
+                        เชื่อมต่อ Google เพื่อดำเนินการต่อ
                       </button>
                     ) : (
                       <button 
@@ -448,12 +480,12 @@ export default function App() {
                         {isProcessing ? (
                           <>
                             <Loader2 className="w-5 h-5 animate-spin" />
-                            Processing {extractedData.events.length} entries...
+                            กำลังดำเนินการ {extractedData.events.length} รายการ...
                           </>
                         ) : (
                           <>
                             <CheckCircle2 className="w-5 h-5" />
-                            Confirm & Automate All
+                            ยืนยันและดำเนินการทั้งหมด
                           </>
                         )}
                       </button>
@@ -475,8 +507,8 @@ export default function App() {
                     <CheckCircle2 className="w-6 h-6" />
                   </div>
                   <div>
-                    <h3 className="text-2xl font-bold">Automation Complete</h3>
-                    <p className="text-emerald-100">File renamed, uploaded, and calendar event created.</p>
+                    <h3 className="text-2xl font-bold">ดำเนินการสำเร็จ</h3>
+                    <p className="text-emerald-100">เปลี่ยนชื่อไฟล์, อัปโหลด และสร้างกิจกรรมในปฏิทินเรียบร้อยแล้ว</p>
                   </div>
                 </div>
                 
@@ -491,7 +523,7 @@ export default function App() {
                       <Upload className="w-5 h-5 text-emerald-200" />
                       <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
                     </div>
-                    <span className="font-bold">View in Drive</span>
+                    <span className="font-bold">ดูใน Drive</span>
                   </a>
                   <a 
                     href={result.calendarLink} 
@@ -503,7 +535,7 @@ export default function App() {
                       <Calendar className="w-5 h-5 text-emerald-200" />
                       <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
                     </div>
-                    <span className="font-bold">View in Calendar</span>
+                    <span className="font-bold">ดูในปฏิทิน</span>
                   </a>
                   {result.sheetLink && (
                     <a 
@@ -516,7 +548,7 @@ export default function App() {
                         <FileText className="w-5 h-5 text-emerald-200" />
                         <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
                       </div>
-                      <span className="font-bold">View in Google Sheets</span>
+                      <span className="font-bold">ดูใน Google Sheets</span>
                     </a>
                   )}
                 </div>
@@ -525,7 +557,7 @@ export default function App() {
                   onClick={resetState}
                   className="mt-8 w-full py-4 border border-white/30 rounded-2xl font-bold hover:bg-white/10 transition-all"
                 >
-                  Process Another File
+                  ดำเนินการไฟล์อื่น
                 </button>
               </motion.div>
             )}
@@ -540,9 +572,9 @@ export default function App() {
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-amber-800 text-sm">
               <h4 className="font-bold mb-2 flex items-center gap-2">
                 <AlertCircle className="w-4 h-4" />
-                Google OAuth Setup Required
+                จำเป็นต้องตั้งค่า Google OAuth
               </h4>
-              <p className="mb-4">If you see "redirect_uri_mismatch", please add this exact URL to your Google Cloud Console "Authorized redirect URIs":</p>
+              <p className="mb-4">หากคุณเห็นข้อความ "redirect_uri_mismatch" กรุณาเพิ่ม URL นี้ใน Google Cloud Console "Authorized redirect URIs":</p>
               <div className="bg-white border border-amber-200 p-3 rounded-xl font-mono break-all select-all">
                 {window.location.origin}/auth/callback
               </div>
@@ -551,12 +583,12 @@ export default function App() {
           
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <p className="text-stone-400 text-sm">
-              © {new Date().getFullYear()} WP Automation Tool. Built with Gemini AI.
+              © {new Date().getFullYear()} ระบบจัดการ WP อัตโนมัติ. พัฒนาด้วย Gemini AI.
             </p>
             <div className="flex items-center gap-6 text-stone-400 text-sm font-medium">
               <span className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                System Active
+                ระบบพร้อมใช้งาน
               </span>
             </div>
           </div>
