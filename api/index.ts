@@ -171,9 +171,37 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     const calendar = google.calendar({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // 1. Upload to Google Drive (Original File)
+    // 1. Get initial WP number from Google Sheet
+    const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+    let currentWpNum = 0;
+    let currentYearBE = (new Date().getFullYear() + 543) % 100;
+    const yearStr = currentYearBE.toString().padStart(2, '0');
+
+    if (spreadsheetId) {
+      try {
+        const sheetData = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: 'Sheet1!C:C',
+        });
+        const rows = sheetData.data.values || [];
+        const lastWp = rows.length > 0 ? rows[rows.length - 1][0] : null;
+        if (lastWp && typeof lastWp === 'string' && lastWp.includes('-')) {
+          const [numPart, yearPart] = lastWp.split('-');
+          if (parseInt(yearPart, 10) === currentYearBE) {
+            currentWpNum = parseInt(numPart, 10);
+          }
+        }
+      } catch (e: any) {
+        console.error('Error fetching next WP from sheet:', e.message);
+      }
+    }
+
+    currentWpNum++;
+    const finalWpNumber = `${currentWpNum.toString().padStart(3, '0')}-${yearStr}`;
+
+    // 2. Upload to Google Drive (Original File)
     const firstEvent = events[0];
-    const driveFileName = `WP ผจฟ.1 (Multi-Entry) เข้า ${firstEvent.stationName} (${firstEvent.date})`;
+    const driveFileName = `WP ผจฟ.1 No.${finalWpNumber} ${firstEvent.requestingUnit} เข้า ${firstEvent.stationName} (${firstEvent.date})`;
     
     let driveResponse;
     try {
@@ -200,7 +228,7 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       });
     }
 
-    // 2. Find or Create "AI_WP" Calendar
+    // 3. Find or Create "AI_WP" Calendar
     let calendarId = '';
     try {
       const calendarList = await calendar.calendarList.list();
@@ -221,77 +249,59 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           needsReauth: true
         });
       }
-      return res.status(500).json({ error: 'ไม่สามารถเข้าถึงหรือสร้างปฏิทิน AI_WP ได้ ระบบจะทำงานเฉพาะในปฏิทิน AI_WP เท่านั้นเพื่อความปลอดภัย' });
-    }
-
-    if (!calendarId) {
-      return res.status(500).json({ error: 'ไม่พบปฏิทิน AI_WP และไม่สามารถสร้างใหม่ได้' });
     }
 
     const formatDateTime = (dt: string) => {
       if (!dt) return null;
-      // Basic validation for YYYY-MM-DD HH:mm or similar
-      let formatted = dt.replace(' ', 'T');
-      if (!formatted.includes('T')) {
-        // If only date is provided, add default time
-        formatted += 'T08:00:00';
-      }
-      const timePart = formatted.split('T')[1];
-      if (timePart && timePart.split(':').length === 2) {
-        formatted += ':00';
-      }
-      
-      // Final check if it's a valid ISO string
       try {
+        // Handle YYYY-MM-DD HH:mm or YYYY-MM-DDTHH:mm
+        let formatted = dt.replace(' ', 'T');
+        
+        // If it's just YYYY-MM-DD, add time
+        if (!formatted.includes('T') && /^\d{4}-\d{2}-\d{2}$/.test(formatted)) {
+          formatted += 'T08:00:00';
+        } else if (formatted.includes('T')) {
+          const [date, time] = formatted.split('T');
+          if (time && time.split(':').length === 2) {
+            formatted = `${date}T${time}:00`;
+          }
+        }
+
         const d = new Date(formatted);
-        if (isNaN(d.getTime())) return null;
+        if (isNaN(d.getTime())) {
+          console.error(`Invalid date generated: ${formatted} from input: ${dt}`);
+          return null;
+        }
         return formatted;
-      } catch {
+      } catch (e) {
+        console.error(`Error formatting date: ${dt}`, e);
         return null;
       }
     };
 
-    const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+    // 4. Loop through events
     const processedEvents = [];
     const sheetRows = [];
-
-    // Get initial WP number if sheet exists
-    let currentWpNum = 0;
-    let currentYearBE = (new Date().getFullYear() + 543) % 100;
-    const yearStr = currentYearBE.toString().padStart(2, '0');
-
-    if (spreadsheetId) {
-      try {
-        const sheetData = await sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: 'Sheet1!C:C',
-        });
-        const rows = sheetData.data.values || [];
-        const lastWp = rows.length > 0 ? rows[rows.length - 1][0] : null;
-        if (lastWp && typeof lastWp === 'string' && lastWp.includes('-')) {
-          const [numPart, yearPart] = lastWp.split('-');
-          if (parseInt(yearPart, 10) === currentYearBE) {
-            currentWpNum = parseInt(numPart, 10);
-          }
-        }
-      } catch (e: any) {
-        console.error('Error fetching next WP for multi-process:', e.message);
-        if (e.message?.includes('Requested entity was not found')) {
-          console.warn('Sheet "Sheet1" not found or spreadsheet ID invalid. Skipping WP auto-increment from sheet.');
-        }
-      }
-    }
-
-    // 3. Loop through events
-    currentWpNum++;
-    const finalWpNumber = `${currentWpNum.toString().padStart(3, '0')}-${yearStr}`;
-
     for (const eventData of events) {
       const startDT = formatDateTime(eventData.startTime);
       const endDT = formatDateTime(eventData.endTime);
 
-      if (!startDT || !endDT) {
-        console.warn(`Invalid date/time for event: ${eventData.stationName}. Skipping calendar entry.`);
+      // Prepare Sheet Row
+      const now = new Date();
+      const timestamp = now.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+      sheetRows.push([
+        timestamp,
+        eventData.requestingUnit,
+        finalWpNumber,
+        eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน',
+        eventData.workDescription,
+        eventData.startTime,
+        eventData.endTime,
+        eventData.department
+      ]);
+
+      if (!startDT || !endDT || !calendarId) {
+        console.warn(`Skipping calendar entry for ${eventData.stationName}. startDT: ${startDT}, endDT: ${endDT}, calendarId: ${calendarId}`);
         continue;
       }
 
@@ -319,27 +329,12 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           wpNumber: finalWpNumber,
           calendarLink: calRes.data.htmlLink
         });
-
-        // Prepare Sheet Row
-        const now = new Date();
-        const timestamp = now.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-        sheetRows.push([
-          timestamp,
-          eventData.requestingUnit,
-          finalWpNumber,
-          eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน',
-          eventData.workDescription,
-          eventData.startTime,
-          eventData.endTime,
-          eventData.department
-        ]);
       } catch (calErr: any) {
         console.error(`Error creating calendar event for ${eventData.stationName}:`, calErr.message);
-        // Continue to next event even if one fails
       }
     }
 
-    // 4. Batch Write to Google Sheet
+    // 5. Batch Write to Google Sheet
     let sheetLink = '';
     if (spreadsheetId && sheetRows.length > 0) {
       try {
@@ -350,8 +345,8 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           requestBody: { values: sheetRows }
         });
         sheetLink = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
-      } catch (err) {
-        console.error('Error writing to Google Sheet:', err);
+      } catch (err: any) {
+        console.error('Error writing to Google Sheet:', err.message);
       }
     }
 
