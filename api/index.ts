@@ -1,5 +1,5 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
+// import { createServer as createViteServer } from 'vite'; // Moved to dynamic import
 import { google } from 'googleapis';
 import multer from 'multer';
 import cookieParser from 'cookie-parser';
@@ -9,13 +9,14 @@ import fs from 'fs';
 const app = express();
 const PORT = 3000;
 
-// Ensure uploads directory exists
-if (!fs.existsSync('uploads')) {
-  fs.mkdirSync('uploads');
+// Ensure uploads directory exists (use /tmp for Vercel)
+const UPLOAD_DIR = process.env.VERCEL ? '/tmp' : 'uploads';
+if (!fs.existsSync(UPLOAD_DIR) && !process.env.VERCEL) {
+  fs.mkdirSync(UPLOAD_DIR);
 }
 
 const upload = multer({ 
-  dest: 'uploads/',
+  dest: UPLOAD_DIR,
   limits: { fileSize: 50 * 1024 * 1024 } // 50MB
 });
 
@@ -179,7 +180,7 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       driveResponse = await drive.files.create({
         requestBody: {
           name: driveFileName,
-          parents: ['1aDRqNGcl934p1wzyuFsxd3bdX6PF6CD2'], 
+          parents: [process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID || '1aDRqNGcl934p1wzyuFsxd3bdX6PF6CD2'], 
         },
         media: {
           mimeType: file.mimetype,
@@ -376,22 +377,29 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
 });
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
+    // Standard Express static serving when not on Vercel
     app.use(express.static('dist'));
     app.get('*', (req, res) => {
       res.sendFile(path.resolve('dist/index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  // Only listen if not on Vercel
+  if (!process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
 }
 
 startServer();
+
+export default app;

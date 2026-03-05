@@ -14,8 +14,16 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-// Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Initialize Gemini safely
+const getGeminiKey = () => {
+  try {
+    return process.env.GEMINI_API_KEY || '';
+  } catch (e) {
+    return '';
+  }
+};
+
+const ai = new GoogleGenAI({ apiKey: getGeminiKey() });
 
 interface ExtractedEvent {
   wpNumber: string;
