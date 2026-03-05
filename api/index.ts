@@ -201,7 +201,7 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     }
 
     // 2. Find or Create "AI_WP" Calendar
-    let calendarId = 'primary';
+    let calendarId = '';
     try {
       const calendarList = await calendar.calendarList.list();
       const aiWpCalendar = calendarList.data.items?.find(c => c.summary === 'AI_WP');
@@ -217,11 +217,15 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       console.error('Error finding/creating AI_WP calendar:', err);
       if (err.message?.includes('insufficient authentication scopes')) {
         return res.status(403).json({ 
-          error: 'Insufficient permissions for Google Calendar. Please sign out and sign in again to grant required permissions.',
+          error: 'สิทธิ์การเข้าถึง Google Calendar ไม่เพียงพอ กรุณาออกจากระบบและเข้าใหม่เพื่ออนุญาตสิทธิ์',
           needsReauth: true
         });
       }
-      // Fallback to primary if other error
+      return res.status(500).json({ error: 'ไม่สามารถเข้าถึงหรือสร้างปฏิทิน AI_WP ได้ ระบบจะทำงานเฉพาะในปฏิทิน AI_WP เท่านั้นเพื่อความปลอดภัย' });
+    }
+
+    if (!calendarId) {
+      return res.status(500).json({ error: 'ไม่พบปฏิทิน AI_WP และไม่สามารถสร้างใหม่ได้' });
     }
 
     const formatDateTime = (dt: string) => {
