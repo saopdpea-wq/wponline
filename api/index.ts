@@ -279,10 +279,10 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     }
 
     // 3. Loop through events
+    currentWpNum++;
+    const finalWpNumber = `${currentWpNum.toString().padStart(3, '0')}-${yearStr}`;
+
     for (const eventData of events) {
-      currentWpNum++;
-      const finalWpNumber = `${currentWpNum.toString().padStart(3, '0')}-${yearStr}`;
-      
       const startDT = formatDateTime(eventData.startTime);
       const endDT = formatDateTime(eventData.endTime);
 
