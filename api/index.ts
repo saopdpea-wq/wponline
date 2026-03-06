@@ -256,36 +256,56 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       }
     }
 
-    const formatDateTime = (dt: string) => {
-      if (!dt) return null;
+    const formatDateTime = (dt: string, isoDateFallback?: string) => {
+      if (!dt && !isoDateFallback) return null;
+      
       try {
-        // Handle YYYY-MM-DD HH:mm or YYYY-MM-DDTHH:mm
-        let formatted = dt.replace(' ', 'T');
-        
-        // If it's just YYYY-MM-DD, add time
-        if (!formatted.includes('T') && /^\d{4}-\d{2}-\d{2}$/.test(formatted)) {
-          formatted += 'T08:00:00';
-        } else if (formatted.includes('T')) {
-          const [date, time] = formatted.split('T');
-          if (time && time.split(':').length === 2) {
-            formatted = `${date}T${time}:00`;
+        let datePart = '';
+        let timePart = '08:00';
+
+        if (dt) {
+          const parts = dt.trim().split(/\s+/);
+          if (parts.length >= 2) {
+            datePart = parts[0];
+            timePart = parts[1];
+          } else if (parts.length === 1) {
+            if (parts[0].includes('-')) {
+              datePart = parts[0];
+            } else if (parts[0].includes(':')) {
+              datePart = isoDateFallback || '';
+              timePart = parts[0];
+            } else {
+              datePart = isoDateFallback || '';
+            }
+          }
+        } else {
+          datePart = isoDateFallback || '';
+        }
+
+        if (!datePart) return null;
+
+        // Handle Thai Year (BE) -> AD conversion in datePart
+        if (datePart.includes('-')) {
+          const dateSegments = datePart.split('-');
+          if (dateSegments.length === 3) {
+            let year = parseInt(dateSegments[0], 10);
+            if (year > 2400) year -= 543;
+            datePart = `${year}-${dateSegments[1]}-${dateSegments[2]}`;
           }
         }
 
-        // Handle Thai Year (BE) -> AD conversion
-        // If year is > 2400, it's likely BE
-        const yearMatch = formatted.match(/^(\d{4})/);
-        if (yearMatch) {
-          const year = parseInt(yearMatch[1], 10);
-          if (year > 2400) {
-            const adYear = year - 543;
-            formatted = adYear + formatted.substring(4);
-          }
+        // Ensure timePart has seconds
+        const timeSegments = timePart.split(':');
+        if (timeSegments.length === 2) {
+          timePart = `${timeSegments[0]}:${timeSegments[1]}:00`;
+        } else if (timeSegments.length === 1) {
+          timePart = `${timeSegments[0]}:00:00`;
         }
 
+        const formatted = `${datePart}T${timePart}`;
         const d = new Date(formatted);
         if (isNaN(d.getTime())) {
-          console.error(`Invalid date generated: ${formatted} from input: ${dt}`);
+          console.error(`Invalid date generated: ${formatted} from input: ${dt}, fallback: ${isoDateFallback}`);
           return null;
         }
         return formatted;
@@ -299,8 +319,8 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     const processedEvents = [];
     const sheetRows = [];
     for (const eventData of events) {
-      const startDT = formatDateTime(eventData.startTime);
-      let endDT = formatDateTime(eventData.endTime);
+      const startDT = formatDateTime(eventData.startTime, eventData.isoDate);
+      let endDT = formatDateTime(eventData.endTime, eventData.isoDate);
 
       if (startDT && !endDT) {
         endDT = startDT;
@@ -308,11 +328,20 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
 
       // Prepare Sheet Row
       const now = new Date();
-      const timestamp = now.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+      const timestamp = now.toLocaleString('th-TH', { 
+        timeZone: 'Asia/Bangkok',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
       
       const splitStart = (eventData.startTime || '').split(' ');
-      const startDate = splitStart[0] || '';
-      const startTimeOnly = splitStart[1] || '';
+      const startDate = splitStart[0] || eventData.isoDate || '';
+      const startTimeOnly = splitStart[1] || '08:00';
 
       const splitEnd = (eventData.endTime || '').split(' ');
       let endDate = splitEnd[0] || '';
@@ -322,19 +351,20 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
         endDate = startDate;
       }
 
+      // Mapping to ensure Column A is WP Number and Column H is Start Date
       sheetRows.push([
-        timestamp, // A
-        eventData.requestingUnit, // B
-        finalWpNumber, // C
-        eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน', // D
-        eventData.workDescription, // E
-        eventData.stationName, // F
-        eventData.date, // G
-        startDate, // H
-        startTimeOnly, // I
-        endDate, // J
-        endTimeOnly, // K
-        eventData.department || 'ผจฟ.1' // L
+        finalWpNumber, // A (WP Number)
+        eventData.stationName, // B
+        eventData.requestingUnit, // C
+        eventData.workDescription, // D
+        eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน', // E
+        eventData.date, // F (Thai format)
+        timestamp, // G (Timestamp)
+        startDate, // H (Start Date - ISO)
+        startTimeOnly, // I (Start Time)
+        endDate, // J (End Date - ISO)
+        endTimeOnly, // K (End Time)
+        eventData.department || 'ผจฟ.1' // L (Department)
       ]);
 
       if (!startDT || !endDT || !calendarId) {
@@ -377,7 +407,7 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       try {
         await sheets.spreadsheets.values.append({
           spreadsheetId,
-          range: 'Sheet1!A:L',
+          range: 'Sheet1!A1',
           valueInputOption: 'USER_ENTERED',
           requestBody: { values: sheetRows }
         });

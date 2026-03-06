@@ -63,6 +63,12 @@ export default function App() {
     checkAuthStatus();
     
     const handleMessage = (event: MessageEvent) => {
+      // Validate origin is from AI Studio preview or localhost
+      const origin = event.origin;
+      if (!origin.endsWith('.run.app') && !origin.includes('localhost')) {
+        return;
+      }
+      
       if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
         setIsAuthenticated(true);
         fetchNextWp();
@@ -71,6 +77,14 @@ export default function App() {
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, []);
+
+  useEffect(() => {
+    // Auto-login attempt if not authenticated and haven't tried this session
+    if (isAuthenticated === false && !sessionStorage.getItem('auto_login_attempted')) {
+      sessionStorage.setItem('auto_login_attempted', 'true');
+      handleLogin();
+    }
+  }, [isAuthenticated]);
 
   const fetchNextWp = async () => {
     try {
@@ -102,9 +116,14 @@ export default function App() {
     try {
       const res = await fetch('/api/auth/url');
       const { url } = await res.json();
-      window.open(url, 'google_oauth', 'width=600,height=700');
+      const popup = window.open(url, 'google_oauth', 'width=600,height=700');
+      
+      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+        console.warn('Popup blocked');
+        setError('เบราว์เซอร์บล็อกหน้าต่างป๊อปอัพ กรุณากดปุ่ม "เชื่อมต่อ Google" ด้วยตนเอง');
+      }
     } catch (err) {
-      setError('Failed to get auth URL');
+      setError('ไม่สามารถดึง URL สำหรับเชื่อมต่อได้');
     }
   };
 
@@ -284,6 +303,48 @@ export default function App() {
       setIsProcessing(false);
     }
   };
+
+  if (isAuthenticated === null) {
+    return (
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-stone-400" />
+      </div>
+    );
+  }
+
+  if (isAuthenticated === false) {
+    return (
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center p-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full bg-white rounded-[2.5rem] p-12 shadow-xl border border-stone-100 text-center"
+        >
+          <div className="w-20 h-20 bg-emerald-600 rounded-3xl flex items-center justify-center text-white mx-auto mb-8 shadow-lg shadow-emerald-200">
+            <Calendar className="w-10 h-10" />
+          </div>
+          <h1 className="text-3xl font-bold text-stone-900 mb-4 tracking-tight">ยินดีต้อนรับ</h1>
+          <p className="text-stone-500 mb-10 leading-relaxed">
+            กรุณาเชื่อมต่อบัญชี Google ของคุณเพื่อเข้าใช้งานระบบจัดการ WP อัตโนมัติ
+          </p>
+          
+          <button 
+            onClick={handleLogin}
+            className="w-full flex items-center justify-center gap-3 text-lg font-bold text-white bg-stone-900 hover:bg-stone-800 transition-all py-4 rounded-2xl shadow-lg active:scale-[0.98]"
+          >
+            <Calendar className="w-6 h-6" />
+            เชื่อมต่อ Google
+          </button>
+          
+          {error && (
+            <p className="mt-6 text-sm text-red-500 font-medium bg-red-50 py-3 px-4 rounded-xl border border-red-100">
+              {error}
+            </p>
+          )}
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-stone-50 text-stone-900 font-sans selection:bg-emerald-100">
