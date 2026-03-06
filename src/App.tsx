@@ -50,6 +50,7 @@ interface ExtractedData {
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [isServiceAccount, setIsServiceAccount] = useState<boolean>(false);
   const [file, setFile] = useState<File | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
@@ -108,6 +109,7 @@ export default function App() {
       const res = await fetch('/api/auth/status');
       const data = await res.json();
       setIsAuthenticated(data.isAuthenticated);
+      setIsServiceAccount(!!data.isServiceAccount);
       if (data.isAuthenticated) fetchNextWp();
     } catch (err) {
       console.error('Auth check failed', err);
@@ -340,6 +342,20 @@ export default function App() {
             <Calendar className="w-6 h-6" />
             เชื่อมต่อ Google
           </button>
+
+          <div className="mt-10 pt-8 border-t border-stone-100">
+            <p className="text-xs text-stone-400 font-medium uppercase tracking-widest mb-4">โหมดการเชื่อมต่อ</p>
+            <div className="grid grid-cols-1 gap-3 text-left">
+              <div className="p-4 rounded-2xl bg-stone-50 border border-stone-100">
+                <p className="text-sm font-bold text-stone-700 mb-1">เชื่อมต่อด้วยตนเอง</p>
+                <p className="text-xs text-stone-500 leading-relaxed">ใช้บัญชี Google ส่วนตัวของคุณ ข้อมูลจะถูกบันทึกใน Drive ของคุณเอง</p>
+              </div>
+              <div className="p-4 rounded-2xl bg-stone-50 border border-stone-100">
+                <p className="text-sm font-bold text-stone-700 mb-1">เชื่อมต่อตลอดเวลา (Service Account)</p>
+                <p className="text-xs text-stone-500 leading-relaxed">ตั้งค่าผ่าน Environment Variables เพื่อให้ทุกคนใช้งานได้ทันทีโดยไม่ต้อง Login</p>
+              </div>
+            </div>
+          </div>
           
           {error && (
             <p className="mt-6 text-sm text-red-500 font-medium bg-red-50 py-3 px-4 rounded-xl border border-red-100">
@@ -367,15 +383,17 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full uppercase tracking-wider">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  เชื่อมต่อแล้ว
+                  {isServiceAccount ? 'เชื่อมต่อตลอดเวลา' : 'เชื่อมต่อแล้ว'}
                 </span>
-                <button 
-                  onClick={handleLogout}
-                  className="p-2 text-stone-400 hover:text-stone-900 transition-colors rounded-lg hover:bg-stone-100"
-                  title="ออกจากระบบ"
-                >
-                  <LogOut className="w-4 h-4" />
-                </button>
+                {!isServiceAccount && (
+                  <button 
+                    onClick={handleLogout}
+                    className="p-2 text-stone-400 hover:text-stone-900 transition-colors rounded-lg hover:bg-stone-100"
+                    title="ออกจากระบบ"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             ) : (
               <button 

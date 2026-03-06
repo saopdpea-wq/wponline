@@ -98,10 +98,38 @@ async function getNextWpNumber(sheets: any, spreadsheetId: string) {
   return `${nextNum.toString().padStart(3, '0')}-${yearStr}`;
 }
 
+const getAuthClient = (req?: any) => {
+  // 1. Try User OAuth tokens from cookies first (User override)
+  const tokens = req?.cookies?.google_tokens;
+  if (tokens) {
+    try {
+      const auth = getOAuth2Client();
+      auth.setCredentials(JSON.parse(tokens));
+      return auth;
+    } catch (e) {
+      console.error('Error parsing user tokens');
+    }
+  }
+
+  // 2. Fallback to Service Account (for "Always Connected" mode)
+  const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (serviceAccountJson) {
+    try {
+      const credentials = JSON.parse(serviceAccountJson);
+      return google.auth.fromJSON(credentials);
+    } catch (e) {
+      console.error('Invalid GOOGLE_SERVICE_ACCOUNT_JSON');
+    }
+  }
+
+  return null;
+};
+
 // Auth Routes
 app.get('/api/auth/url', (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
+    prompt: 'consent', // Force consent to ensure we get a refresh token
     scope: SCOPES
   });
   res.json({ url });
@@ -116,7 +144,7 @@ app.get('/auth/callback', async (req, res) => {
       httpOnly: true,
       secure: true,
       sameSite: 'none',
-      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+      maxAge: 365 * 24 * 60 * 60 * 1000 // Increase to 1 year
     });
 
     res.send(`
@@ -142,7 +170,15 @@ app.get('/auth/callback', async (req, res) => {
 
 app.get('/api/auth/status', (req, res) => {
   const tokens = req.cookies.google_tokens;
-  res.json({ isAuthenticated: !!tokens });
+  const isServiceAccount = !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  
+  if (tokens) {
+    res.json({ isAuthenticated: true, isServiceAccount: false });
+  } else if (isServiceAccount) {
+    res.json({ isAuthenticated: true, isServiceAccount: true });
+  } else {
+    res.json({ isAuthenticated: false, isServiceAccount: false });
+  }
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -151,13 +187,11 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/next-wp', async (req, res) => {
-  const tokens = req.cookies.google_tokens;
-  if (!tokens) return res.status(401).json({ error: 'Not authenticated' });
+  const auth = getAuthClient(req);
+  if (!auth) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    const auth = getOAuth2Client();
-    auth.setCredentials(JSON.parse(tokens));
-    const sheets = google.sheets({ version: 'v4', auth });
+    const sheets = google.sheets({ version: 'v4', auth: auth as any });
     const spreadsheetId = process.env.GOOGLE_SHEET_ID;
 
     if (!spreadsheetId) return res.json({ nextWp: '001-69' });
@@ -171,8 +205,8 @@ app.get('/api/next-wp', async (req, res) => {
 
 // Drive & Calendar Processing
 app.post('/api/process', upload.single('file'), async (req: any, res) => {
-  const tokens = req.cookies.google_tokens;
-  if (!tokens) return res.status(401).json({ error: 'Not authenticated' });
+  const auth = getAuthClient(req);
+  if (!auth) return res.status(401).json({ error: 'Not authenticated' });
 
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'No file uploaded' });
@@ -187,12 +221,9 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
   if (events.length === 0) return res.status(400).json({ error: 'No events to process' });
 
   try {
-    const auth = getOAuth2Client();
-    auth.setCredentials(JSON.parse(tokens));
-
-    const drive = google.drive({ version: 'v3', auth });
-    const calendar = google.calendar({ version: 'v3', auth });
-    const sheets = google.sheets({ version: 'v4', auth });
+    const drive = google.drive({ version: 'v3', auth: auth as any });
+    const calendar = google.calendar({ version: 'v3', auth: auth as any });
+    const sheets = google.sheets({ version: 'v4', auth: auth as any });
 
     // 1. Get next WP number from Google Sheet
     const spreadsheetId = process.env.GOOGLE_SHEET_ID;
