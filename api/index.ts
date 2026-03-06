@@ -318,6 +318,18 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     // 4. Loop through events
     const processedEvents = [];
     const sheetRows = [];
+
+    const getThaiDate = (date: Date) => {
+      const months = [
+        'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+        'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
+      ];
+      const day = date.getDate();
+      const month = months[date.getMonth()];
+      const year = (date.getFullYear() + 543) % 100;
+      return `${day} ${month} ${year.toString().padStart(2, '0')}`;
+    };
+
     for (const eventData of events) {
       const startDT = formatDateTime(eventData.startTime, eventData.isoDate);
       let endDT = formatDateTime(eventData.endTime, eventData.isoDate);
@@ -326,7 +338,7 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
         endDT = startDT;
       }
 
-      // Prepare Sheet Row
+      // Prepare Sheet Rows (Split by day if multi-day)
       const now = new Date();
       const timestamp = now.toLocaleString('th-TH', { 
         timeZone: 'Asia/Bangkok',
@@ -338,34 +350,74 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
         second: '2-digit',
         hour12: false
       });
-      
-      const splitStart = (eventData.startTime || '').split(' ');
-      const startDate = splitStart[0] || eventData.isoDate || '';
-      const startTimeOnly = splitStart[1] || '08:00';
 
-      const splitEnd = (eventData.endTime || '').split(' ');
-      let endDate = splitEnd[0] || '';
-      const endTimeOnly = splitEnd[1] || '';
+      if (startDT && endDT) {
+        const startDateObj = new Date(startDT);
+        const endDateObj = new Date(endDT);
+        
+        // Create a copy for iteration
+        const current = new Date(startDateObj);
+        current.setHours(0, 0, 0, 0);
+        
+        const lastDay = new Date(endDateObj);
+        lastDay.setHours(0, 0, 0, 0);
 
-      if (!endDate && startDate) {
-        endDate = startDate;
+        while (current <= lastDay) {
+          const isFirstDay = current.getTime() === (new Date(startDateObj).setHours(0,0,0,0));
+          const isLastDay = current.getTime() === lastDay.getTime();
+          
+          const rowDateISO = current.toISOString().split('T')[0];
+          const rowThaiDate = getThaiDate(current);
+          
+          const rowStartTime = isFirstDay ? (eventData.startTime?.split(' ')[1] || '08:00') : '08:00';
+          const rowEndTime = isLastDay ? (eventData.endTime?.split(' ')[1] || '17:00') : '17:00';
+
+          sheetRows.push([
+            finalWpNumber, // A (WP Number)
+            eventData.stationName, // B
+            eventData.requestingUnit, // C
+            eventData.workDescription, // D
+            eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน', // E
+            rowThaiDate, // F (Thai format)
+            timestamp, // G (Timestamp)
+            rowDateISO, // H (Start Date - ISO)
+            rowStartTime, // I (Start Time)
+            rowDateISO, // J (End Date - ISO)
+            rowEndTime, // K (End Time)
+            eventData.department || 'ผจฟ.1' // L (Department)
+          ]);
+
+          current.setDate(current.getDate() + 1);
+        }
+      } else {
+        // Fallback for cases where dates couldn't be parsed properly
+        const splitStart = (eventData.startTime || '').split(' ');
+        const startDate = splitStart[0] || eventData.isoDate || '';
+        const startTimeOnly = splitStart[1] || '08:00';
+
+        const splitEnd = (eventData.endTime || '').split(' ');
+        let endDate = splitEnd[0] || '';
+        const endTimeOnly = splitEnd[1] || '';
+
+        if (!endDate && startDate) {
+          endDate = startDate;
+        }
+
+        sheetRows.push([
+          finalWpNumber, // A (WP Number)
+          eventData.stationName, // B
+          eventData.requestingUnit, // C
+          eventData.workDescription, // D
+          eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน', // E
+          eventData.date, // F (Thai format)
+          timestamp, // G (Timestamp)
+          startDate, // H (Start Date - ISO)
+          startTimeOnly, // I (Start Time)
+          endDate, // J (End Date - ISO)
+          endTimeOnly, // K (End Time)
+          eventData.department || 'ผจฟ.1' // L (Department)
+        ]);
       }
-
-      // Mapping to ensure Column A is WP Number and Column H is Start Date
-      sheetRows.push([
-        finalWpNumber, // A (WP Number)
-        eventData.stationName, // B
-        eventData.requestingUnit, // C
-        eventData.workDescription, // D
-        eventData.isStaffed ? 'จัดพนักงาน' : 'ไม่จัดพนักงาน', // E
-        eventData.date, // F (Thai format)
-        timestamp, // G (Timestamp)
-        startDate, // H (Start Date - ISO)
-        startTimeOnly, // I (Start Time)
-        endDate, // J (End Date - ISO)
-        endTimeOnly, // K (End Time)
-        eventData.department || 'ผจฟ.1' // L (Department)
-      ]);
 
       if (!startDT || !endDT || !calendarId) {
         console.warn(`Skipping calendar entry for ${eventData.stationName}. startDT: ${startDT}, endDT: ${endDT}, calendarId: ${calendarId}`);
