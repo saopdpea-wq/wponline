@@ -184,11 +184,29 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           range: 'Sheet1!A:A',
         });
         const rows = sheetData.data.values || [];
-        const lastWp = rows.length > 0 ? rows[rows.length - 1][0] : null;
-        if (lastWp && typeof lastWp === 'string' && lastWp.includes('-')) {
-          const [numPart, yearPart] = lastWp.split('-');
-          if (parseInt(yearPart, 10) === currentYearBE) {
-            currentWpNum = parseInt(numPart, 10);
+        
+        // Find the last valid WP number by searching backwards
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const val = rows[i][0];
+          if (val && typeof val === 'string' && val.includes('-')) {
+            const parts = val.split('-');
+            if (parts.length === 2) {
+              const numPart = parts[0].trim();
+              const yearPart = parts[1].trim();
+              const num = parseInt(numPart, 10);
+              const year = parseInt(yearPart, 10);
+              
+              if (!isNaN(num) && !isNaN(year)) {
+                if (year === currentYearBE) {
+                  currentWpNum = num;
+                  console.log(`Found last WP in current year: ${val}, starting from ${currentWpNum}`);
+                } else {
+                  console.log(`Found last WP from different year: ${val}, resetting for year ${currentYearBE}`);
+                  currentWpNum = 0;
+                }
+                break;
+              }
+            }
           }
         }
       } catch (e: any) {
