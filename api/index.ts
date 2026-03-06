@@ -181,7 +181,7 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       try {
         const sheetData = await sheets.spreadsheets.values.get({
           spreadsheetId,
-          range: 'Sheet1!C:C',
+          range: 'Sheet1!A:A',
         });
         const rows = sheetData.data.values || [];
         const lastWp = rows.length > 0 ? rows[rows.length - 1][0] : null;
