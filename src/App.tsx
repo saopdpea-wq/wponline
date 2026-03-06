@@ -82,7 +82,10 @@ export default function App() {
     // Auto-login attempt if not authenticated and haven't tried this session
     if (isAuthenticated === false && !sessionStorage.getItem('auto_login_attempted')) {
       sessionStorage.setItem('auto_login_attempted', 'true');
-      handleLogin();
+      // Small delay to let the UI render first
+      setTimeout(() => {
+        handleLogin(true); // true means it's an auto-attempt
+      }, 1000);
     }
   }, [isAuthenticated]);
 
@@ -112,7 +115,7 @@ export default function App() {
     }
   };
 
-  const handleLogin = async () => {
+  const handleLogin = async (isAuto = false) => {
     try {
       const res = await fetch('/api/auth/url');
       const { url } = await res.json();
@@ -120,7 +123,9 @@ export default function App() {
       
       if (!popup || popup.closed || typeof popup.closed === 'undefined') {
         console.warn('Popup blocked');
-        setError('เบราว์เซอร์บล็อกหน้าต่างป๊อปอัพ กรุณากดปุ่ม "เชื่อมต่อ Google" ด้วยตนเอง');
+        if (!isAuto) {
+          setError('เบราว์เซอร์บล็อกหน้าต่างป๊อปอัพ กรุณากดปุ่ม "เชื่อมต่อ Google" ด้วยตนเอง');
+        }
       }
     } catch (err) {
       setError('ไม่สามารถดึง URL สำหรับเชื่อมต่อได้');
@@ -329,7 +334,7 @@ export default function App() {
           </p>
           
           <button 
-            onClick={handleLogin}
+            onClick={() => handleLogin()}
             className="w-full flex items-center justify-center gap-3 text-lg font-bold text-white bg-stone-900 hover:bg-stone-800 transition-all py-4 rounded-2xl shadow-lg active:scale-[0.98]"
           >
             <Calendar className="w-6 h-6" />
@@ -374,7 +379,7 @@ export default function App() {
               </div>
             ) : (
               <button 
-                onClick={handleLogin}
+                onClick={() => handleLogin()}
                 className="flex items-center gap-2 text-sm font-bold text-stone-600 hover:text-stone-900 transition-colors bg-white border border-stone-200 px-4 py-2 rounded-xl shadow-sm hover:shadow-md active:scale-95"
               >
                 <Calendar className="w-4 h-4" />
@@ -526,7 +531,7 @@ export default function App() {
                   <div className="pt-4 border-t border-stone-100">
                     {!isAuthenticated ? (
                       <button 
-                        onClick={handleLogin}
+                        onClick={() => handleLogin()}
                         className="w-full bg-stone-900 text-white py-4 rounded-2xl font-bold hover:bg-stone-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-stone-200 active:scale-[0.98]"
                       >
                         <Calendar className="w-5 h-5" />

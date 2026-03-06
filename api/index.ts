@@ -54,12 +54,55 @@ const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets'
 ];
 
+// Helper to get next WP number
+async function getNextWpNumber(sheets: any, spreadsheetId: string) {
+  let currentWpNum = 0;
+  const currentYearBE = (new Date().getFullYear() + 543) % 100;
+  const yearStr = currentYearBE.toString().padStart(2, '0');
+
+  try {
+    // Dynamically find the first sheet name
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    const sheetName = spreadsheet.data.sheets?.[0]?.properties?.title || 'Sheet1';
+    
+    const sheetData = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${sheetName}!A:A`,
+    });
+    const rows = sheetData.data.values || [];
+    
+    // Search backwards for the last valid WP
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const val = rows[i][0];
+      if (val && typeof val === 'string' && val.includes('-')) {
+        const parts = val.split('-');
+        if (parts.length === 2) {
+          const numPart = parts[0].trim();
+          const yearPart = parts[1].trim();
+          const num = parseInt(numPart, 10);
+          const year = parseInt(yearPart, 10);
+          
+          if (!isNaN(num) && !isNaN(year)) {
+            if (year === currentYearBE) {
+              currentWpNum = Math.max(currentWpNum, num);
+            }
+          }
+        }
+      }
+    }
+  } catch (e: any) {
+    console.error('Error in getNextWpNumber:', e.message);
+  }
+
+  const nextNum = currentWpNum + 1;
+  return `${nextNum.toString().padStart(3, '0')}-${yearStr}`;
+}
+
 // Auth Routes
 app.get('/api/auth/url', (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: SCOPES,
-    prompt: 'consent'
+    scope: SCOPES
   });
   res.json({ url });
 });
@@ -119,28 +162,8 @@ app.get('/api/next-wp', async (req, res) => {
 
     if (!spreadsheetId) return res.json({ nextWp: '001-69' });
 
-    const sheetData = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'Sheet1!C:C',
-    });
-    
-    const rows = sheetData.data.values || [];
-    const lastWp = rows.length > 0 ? rows[rows.length - 1][0] : null;
-    
-    const now = new Date();
-    const currentYearBE = (now.getFullYear() + 543) % 100;
-    const yearStr = currentYearBE.toString().padStart(2, '0');
-
-    if (lastWp && typeof lastWp === 'string' && lastWp.includes('-')) {
-      const [numPart, yearPart] = lastWp.split('-');
-      const lastNum = parseInt(numPart, 10);
-      const lastYear = parseInt(yearPart, 10);
-
-      if (lastYear === currentYearBE) {
-        return res.json({ nextWp: `${(lastNum + 1).toString().padStart(3, '0')}-${yearStr}` });
-      }
-    }
-    res.json({ nextWp: `001-${yearStr}` });
+    const nextWp = await getNextWpNumber(sheets, spreadsheetId);
+    res.json({ nextWp });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch next WP' });
   }
@@ -171,51 +194,12 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     const calendar = google.calendar({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // 1. Get initial WP number from Google Sheet
+    // 1. Get next WP number from Google Sheet
     const spreadsheetId = process.env.GOOGLE_SHEET_ID;
-    let currentWpNum = 0;
-    let currentYearBE = (new Date().getFullYear() + 543) % 100;
-    const yearStr = currentYearBE.toString().padStart(2, '0');
-
-    if (spreadsheetId) {
-      try {
-        const sheetData = await sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: 'Sheet1!A:A',
-        });
-        const rows = sheetData.data.values || [];
-        
-        // Find the last valid WP number by searching backwards
-        for (let i = rows.length - 1; i >= 0; i--) {
-          const val = rows[i][0];
-          if (val && typeof val === 'string' && val.includes('-')) {
-            const parts = val.split('-');
-            if (parts.length === 2) {
-              const numPart = parts[0].trim();
-              const yearPart = parts[1].trim();
-              const num = parseInt(numPart, 10);
-              const year = parseInt(yearPart, 10);
-              
-              if (!isNaN(num) && !isNaN(year)) {
-                if (year === currentYearBE) {
-                  currentWpNum = num;
-                  console.log(`Found last WP in current year: ${val}, starting from ${currentWpNum}`);
-                } else {
-                  console.log(`Found last WP from different year: ${val}, resetting for year ${currentYearBE}`);
-                  currentWpNum = 0;
-                }
-                break;
-              }
-            }
-          }
-        }
-      } catch (e: any) {
-        console.error('Error fetching next WP from sheet:', e.message);
-      }
-    }
-
-    currentWpNum++;
-    const finalWpNumber = `${currentWpNum.toString().padStart(3, '0')}-${yearStr}`;
+    if (!spreadsheetId) throw new Error('GOOGLE_SHEET_ID not set');
+    
+    const finalWpNumber = await getNextWpNumber(sheets, spreadsheetId);
+    console.log(`Generated final WP number: ${finalWpNumber}`);
 
     // 2. Upload to Google Drive (Original File)
     const firstEvent = events[0];
