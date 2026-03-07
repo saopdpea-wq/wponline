@@ -272,11 +272,18 @@ export default function App() {
       
       if (!res.ok) {
         const errorText = await res.text();
+        let errorMessage = `Server error: ${res.status}`;
         try {
           const errorJson = JSON.parse(errorText);
-          setError(errorJson.error || `Server error: ${res.status}`);
+          errorMessage = errorJson.error || errorMessage;
         } catch {
-          setError(`Server error: ${res.status}. ${errorText.substring(0, 100)}`);
+          errorMessage = `${errorMessage}. ${errorText.substring(0, 100)}`;
+        }
+
+        setError(errorMessage);
+        
+        if (res.status === 401) {
+          setIsAuthenticated(false);
         }
         return;
       }

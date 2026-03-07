@@ -98,7 +98,7 @@ async function getNextWpNumber(sheets: any, spreadsheetId: string) {
   return `${nextNum.toString().padStart(3, '0')}-${yearStr}`;
 }
 
-const getAuthClient = (req?: any) => {
+const getAuthClient = async (req?: any) => {
   // 1. Try User OAuth tokens from cookies first (User override)
   const tokens = req?.cookies?.google_tokens;
   if (tokens) {
@@ -107,18 +107,37 @@ const getAuthClient = (req?: any) => {
       auth.setCredentials(JSON.parse(tokens));
       return auth;
     } catch (e) {
-      console.error('Error parsing user tokens');
+      console.error('Error parsing user tokens:', e);
     }
   }
 
   // 2. Fallback to Service Account (for "Always Connected" mode)
-  const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  let serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (serviceAccountJson) {
     try {
-      const credentials = JSON.parse(serviceAccountJson);
-      return google.auth.fromJSON(credentials);
-    } catch (e) {
-      console.error('Invalid GOOGLE_SERVICE_ACCOUNT_JSON');
+      // Clean up the string in case it has extra quotes or escaped characters from env
+      serviceAccountJson = serviceAccountJson.trim();
+      if (serviceAccountJson.startsWith("'") && serviceAccountJson.endsWith("'")) {
+        serviceAccountJson = serviceAccountJson.slice(1, -1);
+      }
+      if (serviceAccountJson.startsWith('"') && serviceAccountJson.endsWith('"')) {
+        try {
+          // If it's double-quoted, it might be a JSON-stringified string
+          serviceAccountJson = JSON.parse(serviceAccountJson);
+        } catch (e) {
+          // If parse fails, just use the sliced version
+          serviceAccountJson = serviceAccountJson.slice(1, -1);
+        }
+      }
+
+      const credentials = typeof serviceAccountJson === 'string' ? JSON.parse(serviceAccountJson) : serviceAccountJson;
+      const auth = new google.auth.GoogleAuth({
+        credentials,
+        scopes: SCOPES,
+      });
+      return await auth.getClient();
+    } catch (e: any) {
+      console.error('Invalid GOOGLE_SERVICE_ACCOUNT_JSON or error getting client:', e.message);
     }
   }
 
@@ -170,11 +189,26 @@ app.get('/auth/callback', async (req, res) => {
 
 app.get('/api/auth/status', (req, res) => {
   const tokens = req.cookies.google_tokens;
-  const isServiceAccount = !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  let isServiceAccountValid = false;
+  
+  if (serviceAccountJson) {
+    try {
+      let cleaned = serviceAccountJson.trim();
+      if (cleaned.startsWith("'") && cleaned.endsWith("'")) cleaned = cleaned.slice(1, -1);
+      if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+        try { cleaned = JSON.parse(cleaned); } catch(e) { cleaned = cleaned.slice(1, -1); }
+      }
+      JSON.parse(typeof cleaned === 'string' ? cleaned : JSON.stringify(cleaned));
+      isServiceAccountValid = true;
+    } catch (e) {
+      isServiceAccountValid = false;
+    }
+  }
   
   if (tokens) {
     res.json({ isAuthenticated: true, isServiceAccount: false });
-  } else if (isServiceAccount) {
+  } else if (isServiceAccountValid) {
     res.json({ isAuthenticated: true, isServiceAccount: true });
   } else {
     res.json({ isAuthenticated: false, isServiceAccount: false });
@@ -187,7 +221,7 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/next-wp', async (req, res) => {
-  const auth = getAuthClient(req);
+  const auth = await getAuthClient(req);
   if (!auth) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
@@ -205,7 +239,7 @@ app.get('/api/next-wp', async (req, res) => {
 
 // Drive & Calendar Processing
 app.post('/api/process', upload.single('file'), async (req: any, res) => {
-  const auth = getAuthClient(req);
+  const auth = await getAuthClient(req);
   if (!auth) return res.status(401).json({ error: 'Not authenticated' });
 
   const file = req.file;
@@ -388,6 +422,10 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
         const startDateObj = new Date(startDT);
         const endDateObj = new Date(endDT);
         
+        // Extract actual times from the formatted ISO strings (HH:mm)
+        const actualStartTime = startDT.split('T')[1].substring(0, 5);
+        const actualEndTime = endDT.split('T')[1].substring(0, 5);
+
         // Create a copy for iteration
         const current = new Date(startDateObj);
         current.setHours(0, 0, 0, 0);
@@ -402,8 +440,9 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           const rowDateISO = current.toISOString().split('T')[0];
           const rowThaiDate = getThaiDate(current);
           
-          const rowStartTime = isFirstDay ? (eventData.startTime?.split(' ')[1] || '08:00') : '08:00';
-          const rowEndTime = isLastDay ? (eventData.endTime?.split(' ')[1] || '17:00') : '17:00';
+          // Use actual extracted times for the first/last day, otherwise standard 08:00-17:00
+          const rowStartTime = isFirstDay ? actualStartTime : '08:00';
+          const rowEndTime = isLastDay ? actualEndTime : '17:00';
 
           sheetRows.push([
             finalWpNumber, // A (WP Number)
@@ -424,17 +463,11 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
         }
       } else {
         // Fallback for cases where dates couldn't be parsed properly
-        const splitStart = (eventData.startTime || '').split(' ');
-        const startDate = splitStart[0] || eventData.isoDate || '';
-        const startTimeOnly = splitStart[1] || '08:00';
+        const actualStartTime = startDT ? startDT.split('T')[1].substring(0, 5) : '08:00';
+        const actualEndTime = endDT ? endDT.split('T')[1].substring(0, 5) : '17:00';
 
-        const splitEnd = (eventData.endTime || '').split(' ');
-        let endDate = splitEnd[0] || '';
-        const endTimeOnly = splitEnd[1] || '';
-
-        if (!endDate && startDate) {
-          endDate = startDate;
-        }
+        const startDate = startDT ? startDT.split('T')[0] : (eventData.isoDate || '');
+        const endDate = endDT ? endDT.split('T')[0] : startDate;
 
         sheetRows.push([
           finalWpNumber, // A (WP Number)
@@ -445,9 +478,9 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           eventData.date, // F (Thai format)
           timestamp, // G (Timestamp)
           startDate, // H (Start Date - ISO)
-          startTimeOnly, // I (Start Time)
+          actualStartTime, // I (Start Time)
           endDate, // J (End Date - ISO)
-          endTimeOnly, // K (End Time)
+          actualEndTime, // K (End Time)
           eventData.department || 'ผจฟ.1' // L (Department)
         ]);
       }
