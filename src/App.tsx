@@ -117,16 +117,16 @@ export default function App() {
     }
   };
 
-  const handleLogin = async (isAuto = false) => {
+  const handleLogin = async (isAuto = false, isSetup = false) => {
     try {
-      const res = await fetch('/api/auth/url');
+      const res = await fetch(`/api/auth/url${isSetup ? '?setup=true' : ''}`);
       const { url } = await res.json();
       const popup = window.open(url, 'google_oauth', 'width=600,height=700');
       
       if (!popup || popup.closed || typeof popup.closed === 'undefined') {
         console.warn('Popup blocked');
         if (!isAuto) {
-          setError('เบราว์เซอร์บล็อกหน้าต่างป๊อปอัพ กรุณากดปุ่ม "เชื่อมต่อ Google" ด้วยตนเอง');
+          setError('เบราว์เซอร์บล็อกหน้าต่างป๊อปอัพ กรุณาอนุญาตป๊อปอัพแล้วลองใหม่อีกครั้ง');
         }
       }
     } catch (err) {
@@ -358,8 +358,20 @@ export default function App() {
                 <p className="text-xs text-stone-500 leading-relaxed">ใช้บัญชี Google ส่วนตัวของคุณ ข้อมูลจะถูกบันทึกใน Drive ของคุณเอง</p>
               </div>
               <div className="p-4 rounded-2xl bg-stone-50 border border-stone-100">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-sm font-bold text-stone-700">เชื่อมต่อตลอดเวลา (Refresh Token)</p>
+                  <button 
+                    onClick={() => handleLogin(false, true)}
+                    className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md hover:bg-emerald-100 transition-colors"
+                  >
+                    ตั้งค่าใหม่
+                  </button>
+                </div>
+                <p className="text-xs text-stone-500 leading-relaxed">รับ Refresh Token เพื่อนำไปใส่ใน Environment Variables ให้ระบบทำงานได้ตลอดเวลา</p>
+              </div>
+              <div className="p-4 rounded-2xl bg-stone-50 border border-stone-100">
                 <p className="text-sm font-bold text-stone-700 mb-1">เชื่อมต่อตลอดเวลา (Service Account)</p>
-                <p className="text-xs text-stone-500 leading-relaxed">ตั้งค่าผ่าน Environment Variables เพื่อให้ทุกคนใช้งานได้ทันทีโดยไม่ต้อง Login</p>
+                <p className="text-xs text-stone-500 leading-relaxed">ใช้ไฟล์ JSON ของ Service Account เพื่อความปลอดภัยสูงสุดในระดับองค์กร</p>
               </div>
             </div>
           </div>
