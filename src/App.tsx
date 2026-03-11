@@ -349,32 +349,6 @@ export default function App() {
             <Calendar className="w-6 h-6" />
             เชื่อมต่อ Google
           </button>
-
-          <div className="mt-10 pt-8 border-t border-stone-100">
-            <p className="text-xs text-stone-400 font-medium uppercase tracking-widest mb-4">โหมดการเชื่อมต่อ</p>
-            <div className="grid grid-cols-1 gap-3 text-left">
-              <div className="p-4 rounded-2xl bg-stone-50 border border-stone-100">
-                <p className="text-sm font-bold text-stone-700 mb-1">เชื่อมต่อด้วยตนเอง</p>
-                <p className="text-xs text-stone-500 leading-relaxed">ใช้บัญชี Google ส่วนตัวของคุณ ข้อมูลจะถูกบันทึกใน Drive ของคุณเอง</p>
-              </div>
-              <div className="p-4 rounded-2xl bg-stone-50 border border-stone-100">
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-sm font-bold text-stone-700">เชื่อมต่อตลอดเวลา (Refresh Token)</p>
-                  <button 
-                    onClick={() => handleLogin(false, true)}
-                    className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md hover:bg-emerald-100 transition-colors"
-                  >
-                    ตั้งค่าใหม่
-                  </button>
-                </div>
-                <p className="text-xs text-stone-500 leading-relaxed">รับ Refresh Token เพื่อนำไปใส่ใน Environment Variables ให้ระบบทำงานได้ตลอดเวลา</p>
-              </div>
-              <div className="p-4 rounded-2xl bg-stone-50 border border-stone-100">
-                <p className="text-sm font-bold text-stone-700 mb-1">เชื่อมต่อตลอดเวลา (Service Account)</p>
-                <p className="text-xs text-stone-500 leading-relaxed">ใช้ไฟล์ JSON ของ Service Account เพื่อความปลอดภัยสูงสุดในระดับองค์กร</p>
-              </div>
-            </div>
-          </div>
           
           {error && (
             <p className="mt-6 text-sm text-red-500 font-medium bg-red-50 py-3 px-4 rounded-xl border border-red-100">
@@ -402,7 +376,7 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full uppercase tracking-wider">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  {isServiceAccount ? 'เชื่อมต่อตลอดเวลา' : 'เชื่อมต่อแล้ว'}
+                  เชื่อมต่อแล้ว
                 </span>
                 {!isServiceAccount && (
                   <button 

@@ -173,68 +173,6 @@ app.get('/auth/callback', async (req, res) => {
   try {
     const { tokens } = await oauth2Client.getToken(code as string);
     
-    // If setup mode is requested via state or if we just want to show the token
-    if (state === 'setup' || req.query.setup === 'true') {
-      const refreshToken = tokens.refresh_token;
-      if (!refreshToken) {
-        return res.send(`
-          <div style="font-family: sans-serif; padding: 40px; text-align: center;">
-            <h1 style="color: #d32f2f;">ไม่พบ Refresh Token</h1>
-            <p>กรุณาลองใหม่อีกครั้ง โดยตรวจสอบว่าคุณได้ยกเลิกสิทธิ์แอปเดิมใน Google Account Settings แล้ว</p>
-            <a href="/api/auth/url?setup=true">ลองอีกครั้ง</a>
-          </div>
-        `);
-      }
-
-      return res.send(`
-        <html>
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <script src="https://cdn.tailwindcss.com"></script>
-          </head>
-          <body class="bg-slate-50 flex items-center justify-center min-h-screen p-6">
-            <div class="max-w-xl w-full bg-white rounded-[2rem] p-10 shadow-xl border border-slate-100">
-              <div class="flex items-center gap-4 mb-8">
-                <div class="w-12 h-12 bg-emerald-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-emerald-100">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                </div>
-                <h1 class="text-2xl font-bold text-slate-900 tracking-tight">คัดลอก Refresh Token ของคุณ</h1>
-              </div>
-              
-              <p class="text-slate-500 mb-6 leading-relaxed">นำค่าด้านล่างนี้ไปใส่ใน Vercel Environment Variables ชื่อ</p>
-              <div class="bg-slate-900 text-white px-4 py-2 rounded-xl font-mono text-sm mb-8 inline-block">GOOGLE_REFRESH_TOKEN</div>
-              
-              <div class="relative group mb-10">
-                <div class="absolute -inset-1 bg-gradient-to-r from-emerald-400 to-cyan-400 rounded-2xl blur opacity-25 group-hover:opacity-50 transition duration-1000"></div>
-                <div class="relative bg-white border-2 border-dashed border-slate-200 rounded-2xl p-6">
-                  <code id="token" class="block break-all text-slate-700 font-mono text-sm leading-relaxed">${refreshToken}</code>
-                </div>
-              </div>
-
-              <div class="bg-rose-50 border border-rose-100 rounded-2xl p-6 text-center">
-                <p class="text-rose-600 text-sm font-medium leading-relaxed">
-                  ขั้นตอนสุดท้าย: เมื่อใส่ค่าใน Vercel แล้ว อย่าลืมกด <span class="font-bold">Redeploy</span> เพื่อให้ระบบเริ่มทำงานนะครับ
-                </p>
-              </div>
-
-              <div class="mt-8 text-center">
-                <a href="/" class="text-slate-400 hover:text-slate-600 text-sm font-medium transition-colors">กลับสู่หน้าหลัก</a>
-              </div>
-            </div>
-            <script>
-              document.getElementById('token').addEventListener('click', function() {
-                const text = this.innerText;
-                navigator.clipboard.writeText(text).then(() => {
-                  alert('คัดลอกลง Clipboard แล้ว!');
-                });
-              });
-            </script>
-          </body>
-        </html>
-      `);
-    }
-
     // Standard login flow
     res.cookie('google_tokens', JSON.stringify(tokens), {
       httpOnly: true,
