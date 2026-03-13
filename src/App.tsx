@@ -191,7 +191,7 @@ export default function App() {
                 3. Date of work (Thai format, e.g., 13 ก.พ. 69)
                 4. ISO Date (YYYY-MM-DD)
                 5. Is it staffed (จัดพนักงาน) or unstaffed (ไม่จัดพนักงาน)? Look for keywords like "จัดพนักงาน" or "ไม่จัดพนักงาน". Default to "จัดพนักงาน" if unsure.
-                6. Requesting Unit (หน่วยงานที่ขออนุญาตทำงาน)
+                6. Requesting Unit (หน่วยงานที่ขออนุญาตทำงาน): Extract the exact name of the department or unit requesting the permit. This is a critical field. Look for it near "หน่วยงานที่ขออนุญาต", "สังกัด", or "ผู้ขออนุญาต" (e.g., กฟภ. ผคส.กสฟ.(ก3)). Ensure the name is captured accurately without extra characters.
                 7. Work Description (งานที่จะทำ)
                 8. Start Date/Time (วันเวลาที่ขออนุญาตเริ่มต้น, format: YYYY-MM-DD HH:mm)
                 9. End Date/Time (วันเวลาที่ขออนุญาตสิ้นสุด, format: YYYY-MM-DD HH:mm)
