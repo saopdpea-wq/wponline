@@ -507,12 +507,15 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       }
 
       // Determine colorId based on requesting unit
+      // กสฟ. = Blue (9), กดส. = Red (11), Others = Green (10)
       let colorId = '10'; // Default: Green (Basil)
-      if (eventData.requestingUnit?.includes('กสฟ.')) {
+      const unitClean = (eventData.requestingUnit || '').replace(/\s/g, '');
+      if (unitClean.includes('กสฟ')) {
         colorId = '9'; // Blue (Blueberry)
-      } else if (eventData.requestingUnit?.includes('กดส.')) {
+      } else if (unitClean.includes('กดส')) {
         colorId = '11'; // Red (Tomato)
       }
+      console.log(`Setting colorId ${colorId} for unit: "${eventData.requestingUnit}" (cleaned: "${unitClean}")`);
 
       // Create Calendar Event
       const calendarEvent = {
