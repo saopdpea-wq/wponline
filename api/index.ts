@@ -506,10 +506,19 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
         continue;
       }
 
+      // Determine colorId based on requesting unit
+      let colorId = '10'; // Default: Green (Basil)
+      if (eventData.requestingUnit?.includes('กสฟ.')) {
+        colorId = '9'; // Blue (Blueberry)
+      } else if (eventData.requestingUnit?.includes('กดส.')) {
+        colorId = '11'; // Red (Tomato)
+      }
+
       // Create Calendar Event
       const calendarEvent = {
         summary: eventData.calendarTitle.replace(eventData.wpNumber, finalWpNumber),
         description: `Automated entry for WP No.${finalWpNumber}\nStation: ${eventData.stationName}\nWork: ${eventData.workDescription}\nUnit: ${eventData.requestingUnit}\nFile: ${driveResponse.data.webViewLink}`,
+        colorId: colorId,
         start: {
           dateTime: startDT,
           timeZone: 'Asia/Bangkok',
