@@ -524,6 +524,10 @@ export default function App() {
                           <p className="text-lg font-medium">{event.stationName}</p>
                         </div>
                         <div className="col-span-2">
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">หน่วยงานที่ขออนุญาตทำงาน</label>
+                          <p className="text-lg font-medium">{event.requestingUnit}</p>
+                        </div>
+                        <div className="col-span-2">
                           <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 block mb-1">รายละเอียดงาน</label>
                           <p className="text-lg font-medium">{event.workDescription}</p>
                         </div>
