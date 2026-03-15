@@ -284,7 +284,21 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
 
     // 2. Upload to Google Drive (Original File)
     const firstEvent = events[0];
-    const driveFileName = `WP ผจฟ.1 No.${finalWpNumber} ${firstEvent.requestingUnit} เข้า ${firstEvent.stationName} (${firstEvent.date})`;
+    
+    // Clean up station name: remove "สถานีไฟฟ้า" prefix if exists
+    const cleanStationName = firstEvent.stationName.replace(/^สถานีไฟฟ้า\s*/, '').trim();
+    
+    // Clean up requesting unit: remove spaces
+    const cleanUnit = (firstEvent.requestingUnit || '').replace(/\s/g, '');
+    
+    // Clean up date: ensure 2-digit year if it's 4-digit
+    let cleanDate = firstEvent.date;
+    if (cleanDate.includes('25')) {
+      cleanDate = cleanDate.replace(/25(\d{2})/, '$1');
+    }
+
+    // Construct shorter filename: WPผจฟ.1No.XXX-XXหน่วยงาน เข้าสถานี (วันที่)งานที่จะทำ.pdf
+    const driveFileName = `WPผจฟ.1No.${finalWpNumber}${cleanUnit} เข้า${cleanStationName} (${cleanDate})${firstEvent.workDescription}.pdf`;
     
     let driveResponse;
     try {
