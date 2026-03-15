@@ -298,7 +298,9 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     }
 
     // Construct shorter filename: WPผจฟ.1No.XXX-XXหน่วยงาน เข้าสถานี (วันที่)งานที่จะทำ.pdf
-    const driveFileName = `WPผจฟ.1No.${finalWpNumber}${cleanUnit} เข้า${cleanStationName} (${cleanDate})${firstEvent.workDescription}.pdf`;
+    // Limit work description to 30 characters
+    const shortWorkDesc = (firstEvent.workDescription || '').substring(0, 30);
+    const driveFileName = `WPผจฟ.1No.${finalWpNumber}${cleanUnit} เข้า${cleanStationName} (${cleanDate})${shortWorkDesc}.pdf`;
     
     let driveResponse;
     try {
