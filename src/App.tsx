@@ -260,11 +260,65 @@ export default function App() {
     setIsProcessing(true);
     setError(null);
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('events', JSON.stringify(extractedData.events));
-
     try {
+      let driveFileId = null;
+      
+      // If file is large (> 4MB), upload to Drive directly from client
+      // to bypass server payload limits (FUNCTION_PAYLOAD_TOO_LARGE)
+      if (file.size > 4 * 1024 * 1024) {
+        console.log('File is large, uploading directly to Drive from client...');
+        try {
+          const tokenRes = await fetch('/api/auth/token');
+          if (!tokenRes.ok) throw new Error('Failed to get auth token for direct upload');
+          const { token } = await tokenRes.json();
+          
+          const boundary = '-------314159265358979323846';
+          const delimiter = "\r\n--" + boundary + "\r\n";
+          const close_delim = "\r\n--" + boundary + "--";
+
+          const metadata = {
+            name: file.name,
+            mimeType: file.type
+          };
+
+          const metadataPart = delimiter +
+            'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+            JSON.stringify(metadata) +
+            delimiter +
+            'Content-Type: ' + file.type + '\r\n\r\n';
+
+          const multipartBody = new Blob([metadataPart, file, close_delim], { type: 'multipart/related; boundary=' + boundary });
+
+          const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`
+            },
+            body: multipartBody
+          });
+          
+          if (!uploadRes.ok) {
+            const errText = await uploadRes.text();
+            throw new Error(`Direct upload failed: ${errText}`);
+          }
+          
+          const uploadData = await uploadRes.json();
+          driveFileId = uploadData.id;
+          console.log('Direct upload success, fileId:', driveFileId);
+        } catch (uploadErr: any) {
+          console.error('Direct upload error:', uploadErr);
+          // Fallback to standard upload if direct fails (maybe it's just under the limit)
+        }
+      }
+
+      const formData = new FormData();
+      if (driveFileId) {
+        formData.append('driveFileId', driveFileId);
+      } else {
+        formData.append('file', file);
+      }
+      formData.append('events', JSON.stringify(extractedData.events));
+
       const res = await fetch('/api/process', {
         method: 'POST',
         body: formData

@@ -236,6 +236,19 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ success: true });
 });
 
+app.get('/api/auth/token', async (req, res) => {
+  const auth = await getAuthClient(req);
+  if (!auth) return res.status(401).json({ error: 'Not authenticated' });
+  
+  try {
+    const tokens = await (auth as any).getAccessToken();
+    res.json({ token: tokens.token });
+  } catch (err: any) {
+    console.error('Error getting access token:', err);
+    res.status(500).json({ error: 'Failed to get access token' });
+  }
+});
+
 app.get('/api/next-wp', async (req, res) => {
   const auth = await getAuthClient(req);
   if (!auth) return res.status(401).json({ error: 'Not authenticated' });
@@ -259,7 +272,9 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
   if (!auth) return res.status(401).json({ error: 'Not authenticated' });
 
   const file = req.file;
-  if (!file) return res.status(400).json({ error: 'No file uploaded' });
+  const driveFileId = req.body.driveFileId;
+  
+  if (!file && !driveFileId) return res.status(400).json({ error: 'No file uploaded or file ID provided' });
 
   let events = [];
   try {
@@ -282,7 +297,7 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     const finalWpNumber = await getNextWpNumber(sheets, spreadsheetId);
     console.log(`Generated final WP number: ${finalWpNumber}`);
 
-    // 2. Upload to Google Drive (Original File)
+    // 2. Handle File (Upload or Rename/Move)
     const firstEvent = events[0];
     
     // Clean up station name: remove "สถานีไฟฟ้า" prefix if exists
@@ -303,28 +318,61 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     const driveFileName = `WPผจฟ.1No.${finalWpNumber}${cleanUnit} เข้า${cleanStationName} (${cleanDate})${shortWorkDesc}.pdf`;
     
     let driveResponse;
-    try {
-      driveResponse = await drive.files.create({
-        requestBody: {
-          name: driveFileName,
-          parents: [process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID || '1aDRqNGcl934p1wzyuFsxd3bdX6PF6CD2'], 
-        },
-        media: {
-          mimeType: file.mimetype,
-          body: fs.createReadStream(file.path),
-        },
-        fields: 'id, name, webViewLink',
-      });
-    } catch (driveErr: any) {
-      console.error('Error uploading to specific folder, trying root:', driveErr);
-      driveResponse = await drive.files.create({
-        requestBody: { name: driveFileName },
-        media: {
-          mimeType: file.mimetype,
-          body: fs.createReadStream(file.path),
-        },
-        fields: 'id, name, webViewLink',
-      });
+    const targetFolderId = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID || '1aDRqNGcl934p1wzyuFsxd3bdX6PF6CD2';
+
+    if (driveFileId) {
+      // File already uploaded by client, just rename and move it
+      console.log(`Using existing drive file: ${driveFileId}`);
+      try {
+        // Update name and move to target folder
+        const currentFile = await drive.files.get({ fileId: driveFileId, fields: 'parents' });
+        const previousParents = currentFile.data.parents?.join(',') || '';
+        
+        driveResponse = await drive.files.update({
+          fileId: driveFileId,
+          addParents: targetFolderId,
+          removeParents: previousParents,
+          requestBody: {
+            name: driveFileName
+          },
+          fields: 'id, name, webViewLink'
+        });
+      } catch (updateErr: any) {
+        console.error('Error updating existing drive file:', updateErr);
+        // If move fails, at least try to rename
+        driveResponse = await drive.files.update({
+          fileId: driveFileId,
+          requestBody: { name: driveFileName },
+          fields: 'id, name, webViewLink'
+        });
+      }
+    } else if (file) {
+      // Standard upload
+      try {
+        driveResponse = await drive.files.create({
+          requestBody: {
+            name: driveFileName,
+            parents: [targetFolderId], 
+          },
+          media: {
+            mimeType: file.mimetype,
+            body: fs.createReadStream(file.path),
+          },
+          fields: 'id, name, webViewLink',
+        });
+      } catch (driveErr: any) {
+        console.error('Error uploading to specific folder, trying root:', driveErr);
+        driveResponse = await drive.files.create({
+          requestBody: { name: driveFileName },
+          media: {
+            mimeType: file.mimetype,
+            body: fs.createReadStream(file.path),
+          },
+          fields: 'id, name, webViewLink',
+        });
+      }
+    } else {
+      throw new Error('No file or file ID provided');
     }
 
     // 3. Find or Create "AI_WP" Calendar
