@@ -55,16 +55,12 @@ const SCOPES = [
 ];
 
 // Helper to get next WP number
-async function getNextWpNumber(sheets: any, spreadsheetId: string) {
+async function getNextWpNumber(sheets: any, spreadsheetId: string, sheetName: string = 'Sheet1') {
   let currentWpNum = 0;
   const currentYearBE = (new Date().getFullYear() + 543) % 100;
   const yearStr = currentYearBE.toString().padStart(2, '0');
 
   try {
-    // Dynamically find the first sheet name
-    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheetName = spreadsheet.data.sheets?.[0]?.properties?.title || 'Sheet1';
-    
     const sheetData = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `${sheetName}!A:A`,
@@ -73,7 +69,10 @@ async function getNextWpNumber(sheets: any, spreadsheetId: string) {
     
     // Search backwards for the last valid WP
     for (let i = rows.length - 1; i >= 0; i--) {
-      const val = rows[i][0];
+      const row = rows[i];
+      if (!row || row.length === 0) continue;
+      
+      const val = row[0];
       if (val && typeof val === 'string' && val.includes('-')) {
         const parts = val.split('-');
         if (parts.length === 2) {
@@ -91,7 +90,7 @@ async function getNextWpNumber(sheets: any, spreadsheetId: string) {
       }
     }
   } catch (e: any) {
-    console.error('Error in getNextWpNumber:', e.message);
+    console.error(`Error in getNextWpNumber (Sheet: ${sheetName}):`, e.message);
   }
 
   const nextNum = currentWpNum + 1;
@@ -290,12 +289,37 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     const calendar = google.calendar({ version: 'v3', auth: auth as any });
     const sheets = google.sheets({ version: 'v4', auth: auth as any });
 
-    // 1. Get next WP number from Google Sheet
-    const spreadsheetId = process.env.GOOGLE_SHEET_ID;
-    if (!spreadsheetId) throw new Error('GOOGLE_SHEET_ID not set');
+    // 1. Get next WP number and Sheet Name from Google Sheet
+    const spreadsheetId = (process.env.GOOGLE_SHEET_ID || '').trim();
+    if (!spreadsheetId) throw new Error('GOOGLE_SHEET_ID not set in environment variables');
     
-    const finalWpNumber = await getNextWpNumber(sheets, spreadsheetId);
-    console.log(`Generated final WP number: ${finalWpNumber}`);
+    // Extract ID if it's a full URL
+    let cleanSpreadsheetId = spreadsheetId;
+    if (spreadsheetId.includes('/d/')) {
+      const match = spreadsheetId.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (match) cleanSpreadsheetId = match[1];
+    }
+
+    // Dynamically find the first sheet name
+    let sheetName = 'Sheet1';
+    let finalWpNumber = '001-69';
+    try {
+      const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: cleanSpreadsheetId });
+      sheetName = spreadsheet.data.sheets?.[0]?.properties?.title || 'Sheet1';
+      
+      // Get next WP number using the found sheet name
+      finalWpNumber = await getNextWpNumber(sheets, cleanSpreadsheetId, sheetName);
+    } catch (sheetErr: any) {
+      console.error('Error getting spreadsheet info:', sheetErr.message);
+      // If we can't even get the spreadsheet info, it's likely a permission or ID issue
+      if (sheetErr.code === 404) throw new Error(`Spreadsheet not found. Please check GOOGLE_SHEET_ID: ${cleanSpreadsheetId}`);
+      if (sheetErr.code === 403) throw new Error(`Permission denied for Spreadsheet. Please share it with the Service Account or ensure you are logged in with the right account.`);
+      
+      // Fallback to default if it's some other error
+      finalWpNumber = await getNextWpNumber(sheets, cleanSpreadsheetId, 'Sheet1');
+    }
+
+    console.log(`Generated final WP number: ${finalWpNumber} using sheet: ${sheetName}`);
 
     // 2. Handle File (Upload or Rename/Move)
     const firstEvent = events[0];
@@ -317,8 +341,19 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     const shortWorkDesc = (firstEvent.workDescription || '').substring(0, 30);
     const driveFileName = `WPผจฟ.1No.${finalWpNumber}${cleanUnit} เข้า${cleanStationName} (${cleanDate})${shortWorkDesc}.pdf`;
     
-    let driveResponse;
-    const targetFolderId = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID || '1aDRqNGcl934p1wzyuFsxd3bdX6PF6CD2';
+    let driveResponse: any = null;
+    let driveFileLink = '';
+    
+    // Clean up target folder ID if it's a URL
+    const rawFolderId = (process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID || '').trim();
+    let targetFolderId = 'root';
+    if (rawFolderId) {
+      targetFolderId = rawFolderId;
+      if (rawFolderId.includes('/folders/')) {
+        const match = rawFolderId.match(/\/folders\/([a-zA-Z0-9-_]+)/);
+        if (match) targetFolderId = match[1];
+      }
+    }
 
     if (driveFileId) {
       // File already uploaded by client, just rename and move it
@@ -337,14 +372,22 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           },
           fields: 'id, name, webViewLink'
         });
+        driveFileLink = driveResponse.data.webViewLink || '';
       } catch (updateErr: any) {
-        console.error('Error updating existing drive file:', updateErr);
+        console.error('Error updating existing drive file:', updateErr.message);
         // If move fails, at least try to rename
-        driveResponse = await drive.files.update({
-          fileId: driveFileId,
-          requestBody: { name: driveFileName },
-          fields: 'id, name, webViewLink'
-        });
+        try {
+          driveResponse = await drive.files.update({
+            fileId: driveFileId,
+            requestBody: { name: driveFileName },
+            fields: 'id, name, webViewLink'
+          });
+          driveFileLink = driveResponse.data.webViewLink || '';
+        } catch (renameErr: any) {
+          console.error('Final attempt to rename failed:', renameErr.message);
+          // If we have the ID, we can still construct a link even if update failed
+          driveFileLink = `https://drive.google.com/file/d/${driveFileId}/view`;
+        }
       }
     } else if (file) {
       // Standard upload
@@ -360,23 +403,33 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           },
           fields: 'id, name, webViewLink',
         });
+        driveFileLink = driveResponse.data.webViewLink || '';
       } catch (driveErr: any) {
-        console.error('Error uploading to specific folder, trying root:', driveErr);
-        driveResponse = await drive.files.create({
-          requestBody: { name: driveFileName },
-          media: {
-            mimeType: file.mimetype,
-            body: fs.createReadStream(file.path),
-          },
-          fields: 'id, name, webViewLink',
-        });
+        console.error('Error uploading to specific folder, trying root:', driveErr.message);
+        try {
+          driveResponse = await drive.files.create({
+            requestBody: { name: driveFileName },
+            media: {
+              mimeType: file.mimetype,
+              body: fs.createReadStream(file.path),
+            },
+            fields: 'id, name, webViewLink',
+          });
+          driveFileLink = driveResponse.data.webViewLink || '';
+        } catch (rootErr: any) {
+          console.error('Upload to root also failed:', rootErr.message);
+          throw new Error(`Failed to upload file to Google Drive: ${rootErr.message}`);
+        }
       }
     } else {
       throw new Error('No file or file ID provided');
     }
 
+    console.log(`Drive file handled. Link: ${driveFileLink}`);
+
     // 3. Find or Create "AI_WP" Calendar
     let calendarId = '';
+    let calendarError = null;
     try {
       // Use a larger maxResults to ensure we find it
       const calendarList = await calendar.calendarList.list({ maxResults: 250 });
@@ -394,7 +447,8 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
         console.log('Created new AI_WP calendar:', calendarId);
       }
     } catch (err: any) {
-      console.error('Error finding/creating AI_WP calendar:', err);
+      console.error('Error finding/creating AI_WP calendar:', err.message);
+      calendarError = `ไม่สามารถเข้าถึงหรือสร้างปฏิทิน "AI_WP" ได้: ${err.message}`;
       if (err.message?.includes('insufficient authentication scopes')) {
         return res.status(403).json({ 
           error: 'สิทธิ์การเข้าถึง Google Calendar ไม่เพียงพอ กรุณาออกจากระบบและเข้าใหม่เพื่ออนุญาตสิทธิ์',
@@ -536,7 +590,8 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
             rowStartTime, // I (Start Time)
             rowDateISO, // J (End Date - ISO)
             rowEndTime, // K (End Time)
-            eventData.department || 'ผจฟ.1' // L (Department)
+            eventData.department || 'ผจฟ.1', // L (Department)
+            driveFileLink // M (Drive Link)
           ]);
 
           current.setDate(current.getDate() + 1);
@@ -561,7 +616,8 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
           actualStartTime, // I (Start Time)
           endDate, // J (End Date - ISO)
           actualEndTime, // K (End Time)
-          eventData.department || 'ผจฟ.1' // L (Department)
+          eventData.department || 'ผจฟ.1', // L (Department)
+          driveFileLink // M (Drive Link)
         ]);
       }
 
@@ -584,7 +640,7 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       // Create Calendar Event
       const calendarEvent = {
         summary: eventData.calendarTitle.replace(eventData.wpNumber, finalWpNumber),
-        description: `Automated entry for WP No.${finalWpNumber}\nStation: ${eventData.stationName}\nWork: ${eventData.workDescription}\nUnit: ${eventData.requestingUnit}\nFile: ${driveResponse.data.webViewLink}`,
+        description: `Automated entry for WP No.${finalWpNumber}\nStation: ${eventData.stationName}\nWork: ${eventData.workDescription}\nUnit: ${eventData.requestingUnit}\nFile: ${driveFileLink}`,
         colorId: colorId,
         start: {
           dateTime: startDT,
@@ -613,17 +669,35 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
 
     // 5. Batch Write to Google Sheet
     let sheetLink = '';
-    if (spreadsheetId && sheetRows.length > 0) {
+    let sheetError = null;
+    if (cleanSpreadsheetId && sheetRows.length > 0) {
       try {
         await sheets.spreadsheets.values.append({
-          spreadsheetId,
-          range: 'Sheet1!A1',
+          spreadsheetId: cleanSpreadsheetId,
+          range: `${sheetName}!A1`,
           valueInputOption: 'USER_ENTERED',
           requestBody: { values: sheetRows }
         });
-        sheetLink = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
+        sheetLink = `https://docs.google.com/spreadsheets/d/${cleanSpreadsheetId}`;
       } catch (err: any) {
-        console.error('Error writing to Google Sheet:', err.message);
+        console.error(`Error writing to Google Sheet (${sheetName}):`, err.message);
+        sheetError = err.message;
+        // Try fallback to Sheet1 if dynamic name failed
+        if (sheetName !== 'Sheet1') {
+          try {
+            await sheets.spreadsheets.values.append({
+              spreadsheetId: cleanSpreadsheetId,
+              range: 'Sheet1!A1',
+              valueInputOption: 'USER_ENTERED',
+              requestBody: { values: sheetRows }
+            });
+            sheetLink = `https://docs.google.com/spreadsheets/d/${cleanSpreadsheetId}`;
+            sheetError = null; // Fallback succeeded
+          } catch (fallbackErr: any) {
+            console.error('Fallback Sheet1 write also failed:', fallbackErr.message);
+            sheetError = fallbackErr.message;
+          }
+        }
       }
     }
 
@@ -634,10 +708,13 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
 
     res.json({
       success: true,
-      driveFile: driveResponse.data,
-      calendarEvent: { htmlLink: processedEvents.length > 0 ? processedEvents[0].calendarLink : null }, // Return first for UI
+      driveFile: driveResponse?.data || { name: driveFileName, id: driveFileId, webViewLink: driveFileLink },
+      calendarEvent: { htmlLink: processedEvents.length > 0 ? processedEvents[0].calendarLink : null },
       sheetLink: sheetLink,
-      processedCount: events.length
+      sheetError: sheetError,
+      calendarError: calendarError,
+      processedCount: events.length,
+      calendarCount: processedEvents.length
     });
   } catch (error: any) {
     console.error('Processing error:', error);

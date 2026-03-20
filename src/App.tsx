@@ -56,7 +56,15 @@ export default function App() {
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
   const [nextWp, setNextWp] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [result, setResult] = useState<{ driveLink: string; calendarLink: string; sheetLink?: string } | null>(null);
+  const [result, setResult] = useState<{ 
+    driveLink: string; 
+    calendarLink: string; 
+    sheetLink?: string; 
+    sheetError?: string;
+    calendarError?: string;
+    processedCount?: number;
+    calendarCount?: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -169,7 +177,7 @@ export default function App() {
       const base64Data = await fileDataPromise;
 
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3-flash-preview",
         contents: [
           {
             parts: [
@@ -353,7 +361,11 @@ export default function App() {
         setResult({
           driveLink: data.driveFile.webViewLink,
           calendarLink: data.calendarEvent.htmlLink,
-          sheetLink: data.sheetLink
+          sheetLink: data.sheetLink,
+          sheetError: data.sheetError,
+          calendarError: data.calendarError,
+          processedCount: data.processedCount,
+          calendarCount: data.calendarCount
         });
         fetchNextWp(); // Refresh for the next upload
       } else {
@@ -644,6 +656,16 @@ export default function App() {
                   <div>
                     <h3 className="text-2xl font-bold">ดำเนินการสำเร็จ</h3>
                     <p className="text-emerald-100">เปลี่ยนชื่อไฟล์, อัปโหลด และสร้างกิจกรรมในปฏิทินเรียบร้อยแล้ว</p>
+                    {result.sheetError && (
+                      <p className="mt-2 text-sm bg-amber-500/20 p-2 rounded-lg border border-amber-400/30 text-amber-100">
+                        ⚠️ บันทึกลง Google Sheet ไม่สำเร็จ: {result.sheetError}
+                      </p>
+                    )}
+                    {result.calendarError && (
+                      <p className="mt-2 text-sm bg-amber-500/20 p-2 rounded-lg border border-amber-400/30 text-amber-100">
+                        ⚠️ สร้างกิจกรรมในปฏิทินไม่สำเร็จ: {result.calendarError}
+                      </p>
+                    )}
                   </div>
                 </div>
                 
