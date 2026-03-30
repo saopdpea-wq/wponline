@@ -983,6 +983,10 @@ app.get('/api/diag', (req, res) => {
 });
 
 // Global Error Handler for API
+app.use('/api/*', (req, res, next) => {
+  res.status(404).json({ error: `API route not found: ${req.originalUrl}` });
+});
+
 app.use('/api', (err: any, req: any, res: any, next: any) => {
   console.error('API Error Handler:', err);
   res.status(err.status || 500).json({

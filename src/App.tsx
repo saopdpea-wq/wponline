@@ -144,8 +144,14 @@ export default function App() {
         data = await res.json();
       } else {
         const text = await res.text();
-        console.error('Non-JSON response from server:', text);
-        if (!isAuto) setError('Server ส่งข้อมูลกลับมาไม่ถูกต้อง (ไม่ใช่ JSON)');
+        console.error('Non-JSON response from server:', {
+          status: res.status,
+          statusText: res.statusText,
+          body: text.substring(0, 500)
+        });
+        if (!isAuto) {
+          setError(`Server ส่งข้อมูลกลับมาไม่ถูกต้อง (Status: ${res.status} ${res.statusText}). กรุณาตรวจสอบว่าได้ตั้งค่า GOOGLE_CLIENT_ID และ GOOGLE_CLIENT_SECRET ใน Settings แล้วหรือยัง`);
+        }
         return;
       }
       
