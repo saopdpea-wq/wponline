@@ -1,14 +1,14 @@
 import express from 'express';
+import 'dotenv/config';
 // import { createServer as createViteServer } from 'vite'; // Moved to dynamic import
 import { google } from 'googleapis';
+import { OAuth2Client } from 'google-auth-library';
 import multer from 'multer';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import fs from 'fs';
 import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse');
-const pdf = typeof pdfParse === 'function' ? pdfParse : pdfParse.default;
+import { PDFParse } from 'pdf-parse';
 
 const app = express();
 const PORT = 3000;
@@ -45,18 +45,31 @@ const getRedirectUri = (req?: any) => {
 };
 
 const getOAuth2Client = (req?: any) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET;
+  const clientId = (process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID || '').trim();
+  const clientSecret = (process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET || '').trim();
   
   if (!clientId || !clientSecret) {
+    console.error('Missing Google Credentials:', { 
+      hasClientId: !!clientId, 
+      clientIdLength: clientId?.length,
+      hasClientSecret: !!clientSecret,
+      clientSecretLength: clientSecret?.length
+    });
     throw new Error('MISSING_GOOGLE_CREDENTIALS');
   }
 
-  return new google.auth.OAuth2({
+  const redirectUri = getRedirectUri(req);
+  console.log('Initializing OAuth2Client:', { 
+    clientIdPrefix: clientId.substring(0, 5), 
+    redirectUri 
+  });
+
+  // Use the explicit constructor with positional arguments
+  return new OAuth2Client(
     clientId,
     clientSecret,
-    redirectUri: getRedirectUri(req)
-  });
+    redirectUri
+  );
 };
 
 // const oauth2Client = getOAuth2Client(); // Removed to avoid startup errors
@@ -182,13 +195,17 @@ app.get('/api/auth/url', (req, res) => {
       });
     }
 
+    const redirectUri = getRedirectUri(req);
+    console.log('Generating auth URL with redirectUri:', redirectUri);
+    
     // Re-initialize client to ensure it has the latest env vars
     const currentClient = getOAuth2Client(req);
     const url = currentClient.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent', // Force consent to ensure we get a refresh token
       scope: SCOPES,
-      state: isSetup ? 'setup' : undefined
+      state: isSetup ? 'setup' : undefined,
+      redirect_uri: redirectUri // Explicitly set it here too
     });
     res.json({ url });
   } catch (error: any) {
@@ -199,15 +216,29 @@ app.get('/api/auth/url', (req, res) => {
 
 app.get('/auth/callback', async (req, res) => {
   const { code, state } = req.query;
+  console.log('Auth callback received:', { hasCode: !!code, state });
+
+  if (!code) {
+    return res.status(400).send('No authorization code received');
+  }
+
   try {
     let currentClient;
     try {
       currentClient = getOAuth2Client(req);
-    } catch (e) {
+    } catch (e: any) {
+      console.error('getOAuth2Client failed in callback:', e.message);
       throw new Error('GOOGLE_CLIENT_ID หรือ GOOGLE_CLIENT_SECRET หายไปในขั้นตอน Callback');
     }
 
+    console.log('Attempting to exchange code for tokens...');
+    console.log('Client state:', { 
+      hasClientId: !!(currentClient as any)._clientId, 
+      hasClientSecret: !!(currentClient as any)._clientSecret,
+      hasRedirectUri: !!(currentClient as any)._redirectUri
+    });
     const { tokens } = await currentClient.getToken(code as string);
+    console.log('Tokens received successfully');
     
     // Standard login flow
     res.cookie('google_tokens', JSON.stringify(tokens), {
@@ -793,7 +824,9 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
 
   try {
     const dataBuffer = fs.readFileSync(file.path);
-    const data = await pdf(dataBuffer);
+    
+    const parser = new PDFParse({ data: dataBuffer });
+    const data = await parser.getText();
     
     // Cleanup local file
     if (fs.existsSync(file.path)) {
@@ -804,7 +837,9 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
   } catch (error: any) {
     console.error('PDF extraction error:', error);
     if (file && fs.existsSync(file.path)) {
-      fs.unlinkSync(file.path);
+      try {
+        fs.unlinkSync(file.path);
+      } catch (e) {}
     }
     res.status(500).json({ error: 'Failed to extract text from PDF: ' + error.message });
   }
