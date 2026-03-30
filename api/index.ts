@@ -299,18 +299,84 @@ app.get('/auth/callback', async (req, res) => {
       maxAge: 365 * 24 * 60 * 60 * 1000 // Increase to 1 year
     });
 
+    // Send success message with Refresh Token UI
+    const refreshToken = tokens.refresh_token || 'ไม่พบ Refresh Token (อาจเป็นเพราะคุณเคยเชื่อมต่อแล้ว กรุณายกเลิกสิทธิ์ใน Google Account แล้วลองใหม่)';
+    
     res.send(`
       <html>
-        <body>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <script src="https://cdn.tailwindcss.com"></script>
+          <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&display=swap" rel="stylesheet">
+          <style>
+            body { font-family: 'Kanit', sans-serif; background-color: #f8fafc; }
+          </style>
+        </head>
+        <body class="flex items-center justify-center min-h-screen p-4">
+          <div class="bg-white p-8 rounded-3xl shadow-xl max-w-2xl w-full border border-slate-100">
+            <div class="flex items-center gap-3 mb-6">
+              <div class="bg-emerald-500 p-1.5 rounded-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <h1 class="text-3xl font-bold text-slate-800">คัดลอก <span class="text-indigo-600">Refresh Token</span> ของคุณ</h1>
+            </div>
+
+            <p class="text-slate-600 mb-2 text-lg text-left">นำค่าด้านล่างนี้ไปใส่ใน Vercel Environment Variables ชื่อ</p>
+            <p class="text-2xl font-bold text-slate-900 mb-6 tracking-tight text-left">GOOGLE_REFRESH_TOKEN</p>
+
+            <div class="relative group mb-8">
+              <textarea 
+                id="tokenBox" 
+                readonly 
+                class="w-full h-32 p-5 bg-slate-50 border-2 border-slate-200 rounded-2xl text-slate-700 font-mono text-sm break-all focus:outline-none focus:border-indigo-500 transition-all resize-none"
+              >${refreshToken}</textarea>
+              <button 
+                onclick="copyToken()" 
+                class="absolute top-3 right-3 bg-white border border-slate-200 hover:border-indigo-500 text-slate-600 hover:text-indigo-600 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95"
+              >
+                คัดลอก
+              </button>
+            </div>
+
+            <div class="bg-rose-50 border border-rose-100 p-5 rounded-2xl">
+              <p class="text-rose-600 font-semibold text-center text-lg leading-relaxed">
+                ขั้นตอนสุดท้าย: เมื่อใส่ค่าใน Vercel แล้ว อย่าลืมกด <span class="underline decoration-2 underline-offset-4 text-rose-700">Redeploy</span> เพื่อให้ระบบเริ่มทำงานนะครับ
+              </p>
+            </div>
+
+            <div class="mt-8 text-center flex flex-col gap-4">
+              <p class="text-slate-400 text-sm italic">หมายเหตุ: หากคุณต้องการให้แอปทำงานต่อทันทีโดยไม่ต้องปิดหน้าต่างนี้ ระบบได้ส่งสัญญาณไปยังแอปหลักแล้ว</p>
+              <button onclick="window.close()" class="text-slate-400 hover:text-slate-600 text-sm transition-all underline">
+                ปิดหน้าต่างนี้
+              </button>
+            </div>
+          </div>
+
           <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
-              window.close();
-            } else {
-              window.location.href = '/';
+            function copyToken() {
+              const copyText = document.getElementById("tokenBox");
+              copyText.select();
+              copyText.setSelectionRange(0, 99999);
+              navigator.clipboard.writeText(copyText.value);
+              
+              const btn = event.target;
+              const originalText = btn.innerText;
+              btn.innerText = "คัดลอกแล้ว!";
+              btn.classList.add("bg-indigo-600", "text-white", "border-indigo-600");
+              
+              setTimeout(() => {
+                btn.innerText = originalText;
+                btn.classList.remove("bg-indigo-600", "text-white", "border-indigo-600");
+              }, 2000);
+
+              if (window.opener) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+              }
             }
           </script>
-          <p>Authentication successful. This window should close automatically.</p>
         </body>
       </html>
     `);
