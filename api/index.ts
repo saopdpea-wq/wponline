@@ -161,13 +161,29 @@ const getAuthClient = async (req?: any) => {
 // Auth Routes
 app.get('/api/auth/url', (req, res) => {
   const isSetup = req.query.setup === 'true';
-  const url = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    prompt: 'consent', // Force consent to ensure we get a refresh token
-    scope: SCOPES,
-    state: isSetup ? 'setup' : undefined
-  });
-  res.json({ url });
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      return res.status(400).json({ 
+        error: 'กรุณาตั้งค่า GOOGLE_CLIENT_ID และ GOOGLE_CLIENT_SECRET ใน Settings ก่อนใช้งาน' 
+      });
+    }
+
+    // Re-initialize client to ensure it has the latest env vars
+    const currentClient = getOAuth2Client();
+    const url = currentClient.generateAuthUrl({
+      access_type: 'offline',
+      prompt: 'consent', // Force consent to ensure we get a refresh token
+      scope: SCOPES,
+      state: isSetup ? 'setup' : undefined
+    });
+    res.json({ url });
+  } catch (error: any) {
+    console.error('Error generating auth URL:', error);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการสร้าง URL: ' + error.message });
+  }
 });
 
 app.get('/auth/callback', async (req, res) => {

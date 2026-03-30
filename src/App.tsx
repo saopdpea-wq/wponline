@@ -130,7 +130,14 @@ export default function App() {
   const handleLogin = async (isAuto = false, isSetup = false) => {
     try {
       const res = await fetch(`/api/auth/url${isSetup ? '?setup=true' : ''}`);
-      const { url } = await res.json();
+      const data = await res.json();
+      
+      if (!res.ok) {
+        if (!isAuto) setError(data.error || 'ไม่สามารถดึง URL สำหรับเชื่อมต่อได้');
+        return;
+      }
+
+      const { url } = data;
       const popup = window.open(url, 'google_oauth', 'width=600,height=700');
       
       if (!popup || popup.closed || typeof popup.closed === 'undefined') {
@@ -140,7 +147,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      setError('ไม่สามารถดึง URL สำหรับเชื่อมต่อได้');
+      setError('ไม่สามารถเชื่อมต่อกับ Server ได้');
     }
   };
 
