@@ -980,6 +980,15 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     const dataBuffer = fs.readFileSync(file.path);
     console.log('File read into buffer, length:', dataBuffer.length);
     
+    // Fix for "DOMMatrix is not defined" error in Node.js
+    if (typeof (global as any).DOMMatrix === 'undefined') {
+      (global as any).DOMMatrix = class DOMMatrix {
+        constructor() {}
+        static fromFloat32Array() { return new DOMMatrix(); }
+        static fromFloat64Array() { return new DOMMatrix(); }
+      };
+    }
+
     // Dynamic import to avoid startup crashes on Vercel
     console.log('Importing pdf-parse...');
     const pdfModule: any = await import('pdf-parse');
