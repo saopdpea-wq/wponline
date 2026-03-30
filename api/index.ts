@@ -29,12 +29,22 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
 
 // Google OAuth Configuration
-const getRedirectUri = () => {
-  const baseUrl = (process.env.APP_URL || '').replace(/\/$/, '');
-  return `${baseUrl}/auth/callback`;
+const getRedirectUri = (req?: any) => {
+  if (process.env.APP_URL) {
+    const baseUrl = process.env.APP_URL.replace(/\/$/, '');
+    return `${baseUrl}/auth/callback`;
+  }
+  if (req) {
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const host = req.get ? req.get('host') : req.headers?.host;
+    if (host) {
+      return `${protocol}://${host}/auth/callback`;
+    }
+  }
+  return '/auth/callback';
 };
 
-const getOAuth2Client = () => {
+const getOAuth2Client = (req?: any) => {
   const clientId = process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET;
   
@@ -45,7 +55,7 @@ const getOAuth2Client = () => {
   return new google.auth.OAuth2({
     clientId,
     clientSecret,
-    redirectUri: getRedirectUri()
+    redirectUri: getRedirectUri(req)
   });
 };
 
@@ -106,7 +116,7 @@ const getAuthClient = async (req?: any) => {
   const tokens = req?.cookies?.google_tokens;
   if (tokens) {
     try {
-      const auth = getOAuth2Client();
+      const auth = getOAuth2Client(req);
       auth.setCredentials(JSON.parse(tokens));
       return auth;
     } catch (e) {
@@ -118,7 +128,7 @@ const getAuthClient = async (req?: any) => {
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
   if (refreshToken) {
     try {
-      const auth = getOAuth2Client();
+      const auth = getOAuth2Client(req);
       auth.setCredentials({ refresh_token: refreshToken });
       return auth;
     } catch (e) {
@@ -173,7 +183,7 @@ app.get('/api/auth/url', (req, res) => {
     }
 
     // Re-initialize client to ensure it has the latest env vars
-    const currentClient = getOAuth2Client();
+    const currentClient = getOAuth2Client(req);
     const url = currentClient.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent', // Force consent to ensure we get a refresh token
@@ -192,7 +202,7 @@ app.get('/auth/callback', async (req, res) => {
   try {
     let currentClient;
     try {
-      currentClient = getOAuth2Client();
+      currentClient = getOAuth2Client(req);
     } catch (e) {
       throw new Error('GOOGLE_CLIENT_ID หรือ GOOGLE_CLIENT_SECRET หายไปในขั้นตอน Callback');
     }
@@ -238,7 +248,7 @@ app.get('/auth/callback', async (req, res) => {
 });
 
 app.get('/api/auth/status', (req, res) => {
-  const tokens = req.cookies.google_tokens;
+  const tokens = req.cookies?.google_tokens;
   const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   const hasRefreshToken = !!process.env.GOOGLE_REFRESH_TOKEN;
   let isServiceAccountValid = false;

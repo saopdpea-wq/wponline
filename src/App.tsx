@@ -116,11 +116,18 @@ export default function App() {
   const checkAuthStatus = async () => {
     try {
       const res = await fetch('/api/auth/status');
-      const data = await res.json();
-      setIsAuthenticated(data.isAuthenticated);
-      setIsServiceAccount(!!data.isServiceAccount);
-      setServiceAccountEmail(data.serviceAccountEmail);
-      if (data.isAuthenticated) fetchNextWp();
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const data = await res.json();
+        setIsAuthenticated(data.isAuthenticated);
+        setIsServiceAccount(!!data.isServiceAccount);
+        setServiceAccountEmail(data.serviceAccountEmail);
+        if (data.isAuthenticated) fetchNextWp();
+      } else {
+        const text = await res.text();
+        console.error('Non-JSON response from /api/auth/status:', text);
+        setIsAuthenticated(false);
+      }
     } catch (err) {
       console.error('Auth check failed', err);
       setIsAuthenticated(false);
@@ -130,7 +137,17 @@ export default function App() {
   const handleLogin = async (isAuto = false, isSetup = false) => {
     try {
       const res = await fetch(`/api/auth/url${isSetup ? '?setup=true' : ''}`);
-      const data = await res.json();
+      
+      let data;
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        console.error('Non-JSON response from server:', text);
+        if (!isAuto) setError('Server ส่งข้อมูลกลับมาไม่ถูกต้อง (ไม่ใช่ JSON)');
+        return;
+      }
       
       if (!res.ok) {
         if (!isAuto) setError(data.error || 'ไม่สามารถดึง URL สำหรับเชื่อมต่อได้');
