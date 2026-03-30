@@ -28,6 +28,12 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
 
+// Request Logging Middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 // Google OAuth Configuration
 const getRedirectUri = (req?: any) => {
   let redirectUri = '';
@@ -219,13 +225,14 @@ app.get('/api/auth/url', (req, res) => {
     const redirectUri = getRedirectUri(req);
     console.log('Generating auth URL with redirectUri:', redirectUri);
     
-    // Re-initialize client to ensure it has the latest env vars
     const currentClient = getOAuth2Client(req);
     if (!currentClient) {
+      console.error('getOAuth2Client returned null in /api/auth/url');
       return res.status(400).json({ 
-        error: 'ไม่สามารถสร้าง OAuth Client ได้ กรุณาตรวจสอบการตั้งค่า Credentials' 
+        error: 'ไม่สามารถสร้าง OAuth Client ได้ กรุณาตรวจสอบการตั้งค่า GOOGLE_CLIENT_ID และ GOOGLE_CLIENT_SECRET ใน Settings' 
       });
     }
+    
     const url = currentClient.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent', // Force consent to ensure we get a refresh token
@@ -401,6 +408,28 @@ app.get('/auth/callback', async (req, res) => {
 
 app.get('/api/ping', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+app.get('/api/test-json', (req, res) => {
+  res.json({ message: 'This is a JSON response', status: 200 });
+});
+
+app.get('/api/debug-env', (req, res) => {
+  const mask = (val: string | undefined) => {
+    if (!val) return 'MISSING';
+    if (val.length < 8) return 'SET (TOO SHORT)';
+    return `${val.substring(0, 4)}...${val.substring(val.length - 4)}`;
+  };
+  
+  res.json({
+    GOOGLE_CLIENT_ID: mask(process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID),
+    GOOGLE_CLIENT_SECRET: mask(process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET),
+    GOOGLE_REFRESH_TOKEN: mask(process.env.GOOGLE_REFRESH_TOKEN),
+    GOOGLE_SHEET_ID: mask(process.env.GOOGLE_SHEET_ID),
+    APP_URL: process.env.APP_URL || 'NOT_SET',
+    NODE_ENV: process.env.NODE_ENV,
+    VERCEL: process.env.VERCEL || 'NO'
+  });
 });
 
 app.get('/api/auth/status', (req, res) => {
@@ -991,17 +1020,29 @@ app.get('/api/diag', (req, res) => {
   });
 });
 
-// Global Error Handler for API
+// Global Error Handler
 app.use('/api/*', (req, res, next) => {
   res.status(404).json({ error: `API route not found: ${req.originalUrl}` });
 });
 
-app.use('/api', (err: any, req: any, res: any, next: any) => {
-  console.error('API Error Handler:', err);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal Server Error',
-    code: err.code
-  });
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error('Global Error Handler:', err);
+  const status = err.status || 500;
+  const message = err.message || 'Internal Server Error';
+  
+  if (req.path.startsWith('/api')) {
+    res.status(status).json({ error: message, code: err.code });
+  } else {
+    res.status(status).send(`
+      <html>
+        <body>
+          <h2>Server Error</h2>
+          <p style="color: red;">${message}</p>
+          <a href="/">กลับหน้าหลัก</a>
+        </body>
+      </html>
+    `);
+  }
 });
 
 async function startServer() {

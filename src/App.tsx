@@ -514,9 +514,25 @@ export default function App() {
           </button>
           
           {error && (
-            <p className="mt-6 text-sm text-red-500 font-medium bg-red-50 py-3 px-4 rounded-xl border border-red-100">
-              {error}
-            </p>
+            <div className="mt-6 p-4 bg-red-50 border border-red-100 rounded-xl text-center">
+              <p className="text-sm text-red-500 font-medium mb-3">
+                {error}
+              </p>
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await fetch('/api/debug-env');
+                    const data = await res.json();
+                    alert(JSON.stringify(data, null, 2));
+                  } catch (err) {
+                    alert('Failed to fetch debug info: ' + err);
+                  }
+                }}
+                className="text-xs text-red-400 underline hover:text-red-500"
+              >
+                ตรวจสอบการตั้งค่า (Debug)
+              </button>
+            </div>
           )}
         </motion.div>
       </div>
