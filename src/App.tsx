@@ -149,8 +149,18 @@ export default function App() {
           statusText: res.statusText,
           body: text.substring(0, 500)
         });
+        
+        let errorMessage = `Server ส่งข้อมูลกลับมาไม่ถูกต้อง (Status: ${res.status} ${res.statusText})`;
+        if (text.includes('Vite Error')) {
+          errorMessage += '. ดูเหมือนว่า Vite Dev Server จะมีปัญหา กรุณาลองรีเฟรชหน้าเว็บ';
+        } else if (res.status === 500) {
+          errorMessage += '. กรุณาตรวจสอบว่าได้ตั้งค่า GOOGLE_CLIENT_ID และ GOOGLE_CLIENT_SECRET ใน Settings แล้วหรือยัง';
+        } else if (res.status === 404) {
+          errorMessage += '. ไม่พบ API Route ที่เรียก กรุณาตรวจสอบการตั้งค่า Backend';
+        }
+        
         if (!isAuto) {
-          setError(`Server ส่งข้อมูลกลับมาไม่ถูกต้อง (Status: ${res.status} ${res.statusText}). กรุณาตรวจสอบว่าได้ตั้งค่า GOOGLE_CLIENT_ID และ GOOGLE_CLIENT_SECRET ใน Settings แล้วหรือยัง`);
+          setError(errorMessage);
         }
         return;
       }

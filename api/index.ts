@@ -74,25 +74,19 @@ const getOAuth2Client = (req?: any) => {
   if (!clientId || !clientSecret) {
     console.error('Missing Google Credentials:', { 
       hasClientId: !!clientId, 
-      clientIdLength: clientId?.length,
-      hasClientSecret: !!clientSecret,
-      clientSecretLength: clientSecret?.length
+      hasClientSecret: !!clientSecret
     });
-    throw new Error('MISSING_GOOGLE_CREDENTIALS');
+    return null;
   }
 
   const redirectUri = getRedirectUri(req);
-  console.log('Initializing OAuth2Client:', { 
-    clientIdPrefix: clientId.substring(0, 5), 
-    redirectUri 
-  });
-
-  // Use the explicit constructor with positional arguments
-  return new OAuth2Client(
+  
+  // Use the object-based constructor for better compatibility
+  return new OAuth2Client({
     clientId,
     clientSecret,
     redirectUri
-  );
+  });
 };
 
 // const oauth2Client = getOAuth2Client(); // Removed to avoid startup errors
@@ -153,8 +147,10 @@ const getAuthClient = async (req?: any) => {
   if (tokens) {
     try {
       const auth = getOAuth2Client(req);
-      auth.setCredentials(JSON.parse(tokens));
-      return auth;
+      if (auth) {
+        auth.setCredentials(JSON.parse(tokens));
+        return auth;
+      }
     } catch (e) {
       console.error('Error parsing user tokens:', e);
     }
@@ -165,8 +161,10 @@ const getAuthClient = async (req?: any) => {
   if (refreshToken) {
     try {
       const auth = getOAuth2Client(req);
-      auth.setCredentials({ refresh_token: refreshToken });
-      return auth;
+      if (auth) {
+        auth.setCredentials({ refresh_token: refreshToken });
+        return auth;
+      }
     } catch (e) {
       console.error('Error using GOOGLE_REFRESH_TOKEN:', e);
     }
@@ -223,6 +221,11 @@ app.get('/api/auth/url', (req, res) => {
     
     // Re-initialize client to ensure it has the latest env vars
     const currentClient = getOAuth2Client(req);
+    if (!currentClient) {
+      return res.status(400).json({ 
+        error: 'ไม่สามารถสร้าง OAuth Client ได้ กรุณาตรวจสอบการตั้งค่า Credentials' 
+      });
+    }
     const url = currentClient.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent', // Force consent to ensure we get a refresh token
@@ -274,20 +277,21 @@ app.get('/auth/callback', async (req, res) => {
   }
 
   try {
-    let currentClient;
-    try {
-      currentClient = getOAuth2Client(req);
-    } catch (e: any) {
-      console.error('getOAuth2Client failed in callback:', e.message);
-      throw new Error('GOOGLE_CLIENT_ID หรือ GOOGLE_CLIENT_SECRET หายไปในขั้นตอน Callback');
+    const currentClient = getOAuth2Client(req);
+    if (!currentClient) {
+      console.error('getOAuth2Client failed in callback: Client not configured');
+      return res.status(400).send(`
+        <html>
+          <body>
+            <h2>OAuth Client not configured</h2>
+            <p>กรุณาตรวจสอบการตั้งค่า GOOGLE_CLIENT_ID และ GOOGLE_CLIENT_SECRET ใน Settings</p>
+            <a href="/">กลับหน้าหลัก</a>
+          </body>
+        </html>
+      `);
     }
 
     console.log('Attempting to exchange code for tokens...');
-    console.log('Client state:', { 
-      hasClientId: !!(currentClient as any)._clientId, 
-      hasClientSecret: !!(currentClient as any)._clientSecret,
-      hasRedirectUri: !!(currentClient as any)._redirectUri
-    });
     const { tokens } = await currentClient.getToken(code as string);
     console.log('Tokens received successfully');
     
@@ -395,6 +399,10 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
+app.get('/api/ping', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
 app.get('/api/auth/status', (req, res) => {
   const tokens = req.cookies?.google_tokens;
   const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -442,23 +450,23 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/token', async (req, res) => {
-  const auth = await getAuthClient(req);
-  if (!auth) return res.status(401).json({ error: 'Not authenticated' });
-  
   try {
+    const auth = await getAuthClient(req);
+    if (!auth) return res.status(401).json({ error: 'Not authenticated' });
+    
     const tokens = await (auth as any).getAccessToken();
     res.json({ token: tokens.token });
   } catch (err: any) {
     console.error('Error getting access token:', err);
-    res.status(500).json({ error: 'Failed to get access token' });
+    res.status(500).json({ error: 'Failed to get access token: ' + err.message });
   }
 });
 
 app.get('/api/next-wp', async (req, res) => {
-  const auth = await getAuthClient(req);
-  if (!auth) return res.status(401).json({ error: 'Not authenticated' });
-
   try {
+    const auth = await getAuthClient(req);
+    if (!auth) return res.status(401).json({ error: 'Not authenticated' });
+
     const sheets = google.sheets({ version: 'v4', auth: auth as any });
     const spreadsheetId = process.env.GOOGLE_SHEET_ID;
 
@@ -466,31 +474,32 @@ app.get('/api/next-wp', async (req, res) => {
 
     const nextWp = await getNextWpNumber(sheets, spreadsheetId);
     res.json({ nextWp });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch next WP' });
+  } catch (error: any) {
+    console.error('Error in next-wp:', error);
+    res.status(500).json({ error: 'Failed to fetch next WP: ' + error.message });
   }
 });
 
 // Drive & Calendar Processing
 app.post('/api/process', upload.single('file'), async (req: any, res) => {
-  const auth = await getAuthClient(req);
-  if (!auth) return res.status(401).json({ error: 'Not authenticated' });
-
   const file = req.file;
-  const driveFileId = req.body.driveFileId;
-  
-  if (!file && !driveFileId) return res.status(400).json({ error: 'No file uploaded or file ID provided' });
-
-  let events = [];
   try {
-    events = JSON.parse(req.body.events || '[]');
-  } catch (e) {
-    return res.status(400).json({ error: 'Invalid events data' });
-  }
+    const auth = await getAuthClient(req);
+    if (!auth) return res.status(401).json({ error: 'Not authenticated' });
 
-  if (events.length === 0) return res.status(400).json({ error: 'No events to process' });
+    const driveFileId = req.body.driveFileId;
+    
+    if (!file && !driveFileId) return res.status(400).json({ error: 'No file uploaded or file ID provided' });
 
-  try {
+    let events = [];
+    try {
+      events = JSON.parse(req.body.events || '[]');
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid events data' });
+    }
+
+    if (events.length === 0) return res.status(400).json({ error: 'No events to process' });
+
     const drive = google.drive({ version: 'v3', auth: auth as any });
     const calendar = google.calendar({ version: 'v3', auth: auth as any });
     const sheets = google.sheets({ version: 'v4', auth: auth as any });
