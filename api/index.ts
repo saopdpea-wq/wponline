@@ -989,24 +989,25 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
       };
     }
 
-    // Dynamic import to avoid startup crashes on Vercel
-    console.log('Importing pdf-parse...');
-    const pdfModule: any = await import('pdf-parse');
-    const pdf = pdfModule.default || pdfModule;
-    
-    if (typeof pdf !== 'function') {
-      console.error('pdf-parse is not a function:', typeof pdf);
-      throw new Error('PDF parser initialization failed');
-    }
-
-    console.log('Parsing PDF...');
+    console.log('Starting PDF extraction process...');
     let extractedText = '';
+    
     try {
+      // Try using pdf-parse first
+      console.log('Attempting to use pdf-parse...');
+      const pdfModule: any = await import('pdf-parse');
+      const pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
+      
+      if (typeof pdf !== 'function') {
+        console.warn('pdf-parse is not a function, type:', typeof pdf);
+        throw new Error('PDF parser initialization failed (not a function)');
+      }
+
       const data = await pdf(dataBuffer);
       extractedText = typeof data === 'string' ? data : (data as any).text || '';
       console.log('PDF parsed successfully with pdf-parse, length:', extractedText.length);
     } catch (pdfError: any) {
-      console.warn('pdf-parse failed, falling back to Gemini AI...', pdfError.message);
+      console.warn('pdf-parse failed or could not be initialized, falling back to Gemini AI...', pdfError.message);
       
       // Fallback to Gemini AI for PDF extraction
       if (process.env.GEMINI_API_KEY) {
@@ -1031,7 +1032,7 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
           throw new Error('ทั้งระบบสกัดข้อความปกติและ AI ไม่สามารถอ่านไฟล์นี้ได้: ' + aiError.message);
         }
       } else {
-        throw pdfError;
+        throw new Error('ระบบสกัดข้อความปกติขัดข้อง และไม่มี AI Key สำหรับระบบสำรอง: ' + pdfError.message);
       }
     }
     
