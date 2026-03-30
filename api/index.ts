@@ -976,23 +976,72 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
   if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
   try {
+    console.log('PDF Extraction started for file:', file.originalname, 'size:', file.size);
     const dataBuffer = fs.readFileSync(file.path);
+    console.log('File read into buffer, length:', dataBuffer.length);
     
     // Dynamic import to avoid startup crashes on Vercel
-    const { PDFParse } = await import('pdf-parse');
-    const parser = new PDFParse({ data: dataBuffer });
-    const data = await parser.getText();
+    console.log('Importing pdf-parse...');
+    const pdfModule: any = await import('pdf-parse');
+    const pdf = pdfModule.default || pdfModule;
+    
+    if (typeof pdf !== 'function') {
+      console.error('pdf-parse is not a function:', typeof pdf);
+      throw new Error('PDF parser initialization failed');
+    }
+
+    console.log('Parsing PDF...');
+    let extractedText = '';
+    try {
+      const data = await pdf(dataBuffer);
+      extractedText = typeof data === 'string' ? data : (data as any).text || '';
+      console.log('PDF parsed successfully with pdf-parse, length:', extractedText.length);
+    } catch (pdfError: any) {
+      console.warn('pdf-parse failed, falling back to Gemini AI...', pdfError.message);
+      
+      // Fallback to Gemini AI for PDF extraction
+      if (process.env.GEMINI_API_KEY) {
+        try {
+          const { GoogleGenAI } = await import('@google/genai');
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+          
+          const result = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: [{
+              parts: [
+                { text: "Extract all text from this PDF document accurately." },
+                { inlineData: { data: dataBuffer.toString('base64'), mimeType: "application/pdf" } }
+              ]
+            }]
+          });
+          
+          extractedText = result.text || '';
+          console.log('PDF extracted successfully using Gemini AI fallback, length:', extractedText.length);
+        } catch (aiError: any) {
+          console.error('Gemini AI fallback also failed:', aiError.message);
+          throw new Error('ทั้งระบบสกัดข้อความปกติและ AI ไม่สามารถอ่านไฟล์นี้ได้: ' + aiError.message);
+        }
+      } else {
+        throw pdfError;
+      }
+    }
     
     // Cleanup local file
     if (fs.existsSync(file.path)) {
       fs.unlinkSync(file.path);
     }
 
-    // Ensure we return the text string
-    const extractedText = typeof data === 'string' ? data : (data as any).text || '';
+    if (!extractedText || extractedText.trim().length === 0) {
+      throw new Error('ไม่พบข้อความในไฟล์ PDF นี้ หรือไฟล์อาจเป็นรูปภาพที่ไม่มีข้อความ');
+    }
+
     res.json({ text: extractedText });
   } catch (error: any) {
-    console.error('PDF extraction error:', error);
+    console.error('PDF extraction error details:', {
+      message: error.message,
+      stack: error.stack,
+      file: file.originalname
+    });
     if (file && fs.existsSync(file.path)) {
       try {
         fs.unlinkSync(file.path);

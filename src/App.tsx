@@ -224,11 +224,13 @@ export default function App() {
           body: formData
         });
         
+        const responseData = await extractRes.json().catch(() => ({}));
+        
         if (!extractRes.ok) {
-          throw new Error('ไม่สามารถสกัดข้อความจาก PDF ได้');
+          throw new Error(responseData.error || 'ไม่สามารถสกัดข้อความจาก PDF ได้');
         }
         
-        const { text } = await extractRes.json();
+        const { text } = responseData;
         contents = [
           {
             text: `Extract information from this Work Permit (WP) text for Thai electrical substations.
