@@ -995,21 +995,21 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     try {
       // Try using pdf-parse first
       console.log('Attempting to use pdf-parse...');
-      const pdfModule: any = await import('pdf-parse');
       
-      // Handle different module structures (ESM vs CJS)
       let pdf: any = null;
-      if (typeof pdfModule === 'function') {
-        pdf = pdfModule;
-      } else if (pdfModule && typeof pdfModule.default === 'function') {
-        pdf = pdfModule.default;
-      } else if (pdfModule && pdfModule.pdf && typeof pdfModule.pdf === 'function') {
-        pdf = pdfModule.pdf;
+      try {
+        // Use createRequire for better CommonJS compatibility in ESM
+        const { createRequire } = await import('module');
+        const require = createRequire(import.meta.url);
+        pdf = require('pdf-parse');
+      } catch (requireError) {
+        console.warn('createRequire failed, trying dynamic import...', requireError);
+        const pdfModule: any = await import('pdf-parse');
+        pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
       }
       
-      if (!pdf) {
-        console.warn('pdf-parse structure:', Object.keys(pdfModule));
-        throw new Error('PDF parser initialization failed (function not found in module)');
+      if (typeof pdf !== 'function') {
+        throw new Error('PDF parser function not found');
       }
 
       const data = await pdf(dataBuffer);
