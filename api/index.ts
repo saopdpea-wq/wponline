@@ -7,7 +7,8 @@ import path from 'path';
 import fs from 'fs';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const pdf = require('pdf-parse');
+const pdfParse = require('pdf-parse');
+const pdf = typeof pdfParse === 'function' ? pdfParse : pdfParse.default;
 
 const app = express();
 const PORT = 3000;
@@ -41,11 +42,11 @@ const getOAuth2Client = () => {
     throw new Error('MISSING_GOOGLE_CREDENTIALS');
   }
 
-  return new google.auth.OAuth2(
+  return new google.auth.OAuth2({
     clientId,
     clientSecret,
-    getRedirectUri()
-  );
+    redirectUri: getRedirectUri()
+  });
 };
 
 // const oauth2Client = getOAuth2Client(); // Removed to avoid startup errors
