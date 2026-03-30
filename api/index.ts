@@ -7,8 +7,6 @@ import multer from 'multer';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import fs from 'fs';
-import { createRequire } from 'module';
-import { PDFParse } from 'pdf-parse';
 
 const app = express();
 const PORT = 3000;
@@ -980,6 +978,8 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
   try {
     const dataBuffer = fs.readFileSync(file.path);
     
+    // Dynamic import to avoid startup crashes on Vercel
+    const { PDFParse } = await import('pdf-parse');
     const parser = new PDFParse({ data: dataBuffer });
     const data = await parser.getText();
     
