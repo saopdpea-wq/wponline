@@ -189,7 +189,14 @@ app.get('/api/auth/url', (req, res) => {
 app.get('/auth/callback', async (req, res) => {
   const { code, state } = req.query;
   try {
-    const { tokens } = await oauth2Client.getToken(code as string);
+    // Re-initialize client to ensure it has the latest env vars from Settings
+    const currentClient = getOAuth2Client();
+    
+    if (!currentClient._clientId || !currentClient._clientSecret) {
+      throw new Error('GOOGLE_CLIENT_ID หรือ GOOGLE_CLIENT_SECRET หายไปในขั้นตอน Callback');
+    }
+
+    const { tokens } = await currentClient.getToken(code as string);
     
     // Standard login flow
     res.cookie('google_tokens', JSON.stringify(tokens), {
