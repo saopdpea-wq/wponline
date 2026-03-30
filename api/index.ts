@@ -55,8 +55,21 @@ const getRedirectUri = (req?: any) => {
 };
 
 const getOAuth2Client = (req?: any) => {
-  const clientId = (process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID || '').trim();
-  const clientSecret = (process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET || '').trim();
+  const clientId = (
+    process.env.GOOGLE_CLIENT_ID || 
+    process.env.CLIENT_ID || 
+    process.env.Google_Client_Id || 
+    process.env.google_client_id || 
+    ''
+  ).trim();
+  
+  const clientSecret = (
+    process.env.GOOGLE_CLIENT_SECRET || 
+    process.env.CLIENT_SECRET || 
+    process.env.Google_Client_Secret || 
+    process.env.google_client_secret || 
+    ''
+  ).trim();
   
   if (!clientId || !clientSecret) {
     console.error('Missing Google Credentials:', { 
@@ -886,15 +899,29 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
 });
 
 app.get('/api/diag', (req, res) => {
+  const getEnvStatus = (key: string) => {
+    const val = process.env[key] || process.env[key.toLowerCase()] || process.env[key.charAt(0).toUpperCase() + key.slice(1).toLowerCase()];
+    return val ? 'SET' : 'MISSING';
+  };
+
   res.json({
     APP_URL: process.env.APP_URL || 'NOT_SET',
-    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? 'SET' : (process.env.CLIENT_ID ? 'SET (via CLIENT_ID)' : 'MISSING'),
-    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? 'SET' : (process.env.CLIENT_SECRET ? 'SET (via CLIENT_SECRET)' : 'MISSING'),
-    GOOGLE_SHEET_ID: process.env.GOOGLE_SHEET_ID ? 'SET' : 'MISSING',
-    GOOGLE_DRIVE_ROOT_FOLDER_ID: process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID ? 'SET' : 'MISSING',
+    GOOGLE_CLIENT_ID: getEnvStatus('GOOGLE_CLIENT_ID'),
+    GOOGLE_CLIENT_SECRET: getEnvStatus('GOOGLE_CLIENT_SECRET'),
+    GOOGLE_SHEET_ID: getEnvStatus('GOOGLE_SHEET_ID'),
+    GOOGLE_DRIVE_ROOT_FOLDER_ID: getEnvStatus('GOOGLE_DRIVE_ROOT_FOLDER_ID'),
+    GEMINI_API_KEY: getEnvStatus('GEMINI_API_KEY'),
     NODE_ENV: process.env.NODE_ENV,
-    PORT: PORT,
     VERCEL: process.env.VERCEL || 'NO'
+  });
+});
+
+// Global Error Handler for API
+app.use('/api', (err: any, req: any, res: any, next: any) => {
+  console.error('API Error Handler:', err);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal Server Error',
+    code: err.code
   });
 });
 

@@ -22,7 +22,7 @@ import { motion, AnimatePresence } from 'motion/react';
 // Initialize Gemini safely
 const getGeminiKey = () => {
   try {
-    return process.env.GEMINI_API_KEY || '';
+    return process.env.GEMINI_API_KEY || process.env.Gemini_API_Key || '';
   } catch (e) {
     return '';
   }
