@@ -30,18 +30,28 @@ app.use(cookieParser());
 
 // Google OAuth Configuration
 const getRedirectUri = (req?: any) => {
+  let redirectUri = '';
   if (process.env.APP_URL) {
     const baseUrl = process.env.APP_URL.replace(/\/$/, '');
-    return `${baseUrl}/auth/callback`;
-  }
-  if (req) {
+    redirectUri = `${baseUrl}/auth/callback`;
+  } else if (req) {
     const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
     const host = req.get ? req.get('host') : req.headers?.host;
     if (host) {
-      return `${protocol}://${host}/auth/callback`;
+      redirectUri = `${protocol}://${host}/auth/callback`;
     }
   }
-  return '/auth/callback';
+  
+  if (!redirectUri || redirectUri === '/auth/callback') {
+    redirectUri = '/auth/callback';
+  }
+
+  console.log('Generated Redirect URI:', redirectUri, { 
+    hasAppUrl: !!process.env.APP_URL,
+    protocol: req?.headers?.['x-forwarded-proto'] || req?.protocol,
+    host: req?.get ? req.get('host') : req?.headers?.host
+  });
+  return redirectUri;
 };
 
 const getOAuth2Client = (req?: any) => {
@@ -215,11 +225,39 @@ app.get('/api/auth/url', (req, res) => {
 });
 
 app.get('/auth/callback', async (req, res) => {
-  const { code, state } = req.query;
-  console.log('Auth callback received:', { hasCode: !!code, state });
+  const { code, state, error, error_description } = req.query;
+  console.log('Auth callback received:', { 
+    hasCode: !!code, 
+    state, 
+    error, 
+    error_description,
+    fullUrl: req.originalUrl 
+  });
+
+  if (error) {
+    return res.status(400).send(`
+      <html>
+        <body>
+          <h2>Authentication Error from Google</h2>
+          <p style="color: red;">Error: ${error}</p>
+          <p>Description: ${error_description}</p>
+          <a href="/">กลับหน้าหลัก</a>
+        </body>
+      </html>
+    `);
+  }
 
   if (!code) {
-    return res.status(400).send('No authorization code received');
+    return res.status(400).send(`
+      <html>
+        <body>
+          <h2>ไม่พบ Authorization Code</h2>
+          <p>กรุณากลับไปที่หน้าหลักและลองกดเชื่อมต่อใหม่อีกครั้ง</p>
+          <p>หากปัญหายังคงอยู่ กรุณาตรวจสอบว่าได้ตั้งค่า Redirect URI ใน Google Cloud Console ถูกต้องแล้ว</p>
+          <a href="/">กลับหน้าหลัก</a>
+        </body>
+      </html>
+    `);
   }
 
   try {
@@ -833,7 +871,9 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
       fs.unlinkSync(file.path);
     }
 
-    res.json({ text: data.text });
+    // Ensure we return the text string
+    const extractedText = typeof data === 'string' ? data : (data as any).text || '';
+    res.json({ text: extractedText });
   } catch (error: any) {
     console.error('PDF extraction error:', error);
     if (file && fs.existsSync(file.path)) {
@@ -843,6 +883,19 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     }
     res.status(500).json({ error: 'Failed to extract text from PDF: ' + error.message });
   }
+});
+
+app.get('/api/diag', (req, res) => {
+  res.json({
+    APP_URL: process.env.APP_URL || 'NOT_SET',
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? 'SET' : (process.env.CLIENT_ID ? 'SET (via CLIENT_ID)' : 'MISSING'),
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? 'SET' : (process.env.CLIENT_SECRET ? 'SET (via CLIENT_SECRET)' : 'MISSING'),
+    GOOGLE_SHEET_ID: process.env.GOOGLE_SHEET_ID ? 'SET' : 'MISSING',
+    GOOGLE_DRIVE_ROOT_FOLDER_ID: process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID ? 'SET' : 'MISSING',
+    NODE_ENV: process.env.NODE_ENV,
+    PORT: PORT,
+    VERCEL: process.env.VERCEL || 'NO'
+  });
 });
 
 async function startServer() {
