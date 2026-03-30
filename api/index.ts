@@ -38,7 +38,7 @@ const getOAuth2Client = () => {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET;
   
   if (!clientId || !clientSecret) {
-    console.error('MISSING GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in environment variables');
+    throw new Error('MISSING_GOOGLE_CREDENTIALS');
   }
 
   return new google.auth.OAuth2(
@@ -48,7 +48,7 @@ const getOAuth2Client = () => {
   );
 };
 
-const oauth2Client = getOAuth2Client();
+// const oauth2Client = getOAuth2Client(); // Removed to avoid startup errors
 
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
@@ -189,10 +189,10 @@ app.get('/api/auth/url', (req, res) => {
 app.get('/auth/callback', async (req, res) => {
   const { code, state } = req.query;
   try {
-    // Re-initialize client to ensure it has the latest env vars from Settings
-    const currentClient = getOAuth2Client();
-    
-    if (!currentClient._clientId || !currentClient._clientSecret) {
+    let currentClient;
+    try {
+      currentClient = getOAuth2Client();
+    } catch (e) {
       throw new Error('GOOGLE_CLIENT_ID หรือ GOOGLE_CLIENT_SECRET หายไปในขั้นตอน Callback');
     }
 
@@ -221,9 +221,18 @@ app.get('/auth/callback', async (req, res) => {
         </body>
       </html>
     `);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error getting tokens:', error);
-    res.status(500).send('Authentication failed');
+    res.status(500).send(`
+      <html>
+        <body>
+          <h2>Authentication failed</h2>
+          <p style="color: red;">Error: ${error.message}</p>
+          <p>กรุณาตรวจสอบว่าได้ตั้งค่า GOOGLE_CLIENT_ID และ GOOGLE_CLIENT_SECRET ใน Settings ครบถ้วนแล้ว</p>
+          <a href="/">กลับหน้าหลัก</a>
+        </body>
+      </html>
+    `);
   }
 });
 
