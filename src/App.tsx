@@ -51,6 +51,7 @@ interface ExtractedData {
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [isServiceAccount, setIsServiceAccount] = useState<boolean>(false);
+  const [serviceAccountEmail, setServiceAccountEmail] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
@@ -118,6 +119,7 @@ export default function App() {
       const data = await res.json();
       setIsAuthenticated(data.isAuthenticated);
       setIsServiceAccount(!!data.isServiceAccount);
+      setServiceAccountEmail(data.serviceAccountEmail);
       if (data.isAuthenticated) fetchNextWp();
     } catch (err) {
       console.error('Auth check failed', err);
@@ -169,21 +171,65 @@ export default function App() {
     setExtractedData(null);
 
     try {
-      const reader = new FileReader();
-      const fileDataPromise = new Promise<string>((resolve) => {
-        reader.onload = () => resolve((reader.result as string).split(',')[1]);
-        reader.readAsDataURL(file);
-      });
-      const base64Data = await fileDataPromise;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
+      let contents: any[] = [];
+      
+      if (file.type === 'application/pdf') {
+        // Use server-side extraction for PDF to get text first
+        // This is more reliable for text-based PDFs
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const extractRes = await fetch('/api/extract-pdf', {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!extractRes.ok) {
+          throw new Error('ไม่สามารถสกัดข้อความจาก PDF ได้');
+        }
+        
+        const { text } = await extractRes.json();
+        contents = [
+          {
+            text: `Extract information from this Work Permit (WP) text for Thai electrical substations.
+            
+            TEXT FROM PDF:
+            ${text}
+            
+            IMPORTANT: If the document contains multiple work entries, they MUST ALL share the same WP Number found in the document. Do not generate different WP numbers for different entries within the same file.
+            
+            For EACH entry found, extract:
+            1. WP Number (e.g., 013-69)
+            2. Station Name (e.g., สถานีไฟฟ้ากระทุ่มแบน 6)
+            3. Date of work (Thai format, e.g., 13 ก.พ. 69)
+            4. ISO Date (YYYY-MM-DD)
+            5. Is it staffed (จัดพนักงาน) or unstaffed (ไม่จัดพนักงาน)? Look for keywords like "จัดพนักงาน" or "ไม่จัดพนักงาน". Default to "จัดพนักงาน" if unsure.
+            6. Requesting Unit (หน่วยงานที่ขออนุญาตทำงาน): Extract the exact name of the department or unit requesting the permit. This is a critical field. Look for it near "หน่วยงานที่ขออนุญาต", "สังกัด", or "ผู้ขออนุญาต" (e.g., กฟภ. ผคส.กสฟ.(ก3)). Ensure the name is captured accurately without extra characters.
+            7. Work Description (งานที่จะทำ)
+            8. Start Date/Time (วันเวลาที่ขออนุญาตเริ่มต้น, format: YYYY-MM-DD HH:mm)
+            9. End Date/Time (วันเวลาที่ขออนุญาตสิ้นสุด, format: YYYY-MM-DD HH:mm)
+            10. Department (แผนก, default to "ผจฟ.1" if not found)
+            
+            Generate a Calendar Title pattern for each: "[Station Name] ([Staffed Status]) WP ผจฟ.1 No.[WP Number] บำรุงรักษาระบบ SCPS ประจำปี (ผปค.กสฟ.ก3)"
+            
+            Return a JSON object with an "events" array containing all found entries.`
+          }
+        ];
+      } else {
+        // For images, send directly to Gemini
+        const reader = new FileReader();
+        const fileDataPromise = new Promise<string>((resolve) => {
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.readAsDataURL(file);
+        });
+        const base64Data = await fileDataPromise;
+        
+        contents = [
           {
             parts: [
               {
                 inlineData: {
-                  mimeType: file.type,
+                  mimeType: file.type || 'image/jpeg',
                   data: base64Data
                 }
               },
@@ -211,7 +257,12 @@ export default function App() {
               }
             ]
           }
-        ],
+        ];
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: contents,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -257,7 +308,13 @@ export default function App() {
       setExtractedData(data);
     } catch (err: any) {
       console.error('Extraction failed', err);
-      setError('ไม่สามารถสกัดข้อมูลจากไฟล์ได้ กรุณาลองใหม่อีกครั้งหรือตรวจสอบรูปแบบไฟล์');
+      if (err.message?.includes('API_KEY_INVALID') || err.message?.includes('API key not found')) {
+        setError('API Key สำหรับ Gemini ไม่ถูกต้องหรือไม่ได้ตั้งค่า กรุณาตรวจสอบการตั้งค่า');
+      } else if (err.message?.includes('SAFETY')) {
+        setError('ไม่สามารถสกัดข้อมูลได้เนื่องจากติดตัวกรองความปลอดภัยของ AI กรุณาลองใช้ไฟล์อื่น');
+      } else {
+        setError(err.message || 'ไม่สามารถสกัดข้อมูลจากไฟล์ได้ กรุณาลองใหม่อีกครั้งหรือตรวจสอบรูปแบบไฟล์');
+      }
     } finally {
       setIsExtracting(false);
     }
@@ -657,14 +714,41 @@ export default function App() {
                     <h3 className="text-2xl font-bold">ดำเนินการสำเร็จ</h3>
                     <p className="text-emerald-100">เปลี่ยนชื่อไฟล์, อัปโหลด และสร้างกิจกรรมในปฏิทินเรียบร้อยแล้ว</p>
                     {result.sheetError && (
-                      <p className="mt-2 text-sm bg-amber-500/20 p-2 rounded-lg border border-amber-400/30 text-amber-100">
-                        ⚠️ บันทึกลง Google Sheet ไม่สำเร็จ: {result.sheetError}
-                      </p>
+                      <div className="mt-2 text-sm bg-amber-500/20 p-3 rounded-lg border border-amber-400/30 text-amber-100">
+                        <p className="font-bold flex items-center gap-2 mb-1">
+                          ⚠️ บันทึกลง Google Sheet ไม่สำเร็จ
+                        </p>
+                        <p className="mb-2 opacity-90">{result.sheetError}</p>
+                        
+                        {result.sheetError.toLowerCase().includes('permission') && (
+                          <div className="mt-2 pt-2 border-t border-amber-400/20 text-xs space-y-1">
+                            <p className="font-semibold text-amber-200">วิธีแก้ไข:</p>
+                            {isServiceAccount ? (
+                              <p>1. แชร์ไฟล์ Google Sheet ให้กับอีเมล Service Account: <code className="bg-black/20 px-1 rounded select-all">{serviceAccountEmail}</code> โดยให้สิทธิ์เป็น "Editor"</p>
+                            ) : (
+                              <p>1. ตรวจสอบว่าคุณมีสิทธิ์เขียน (Editor) ในไฟล์ Google Sheet นี้</p>
+                            )}
+                            <p>2. ตรวจสอบว่า GOOGLE_SHEET_ID ในการตั้งค่าถูกต้อง</p>
+                            {!isServiceAccount && <p>3. ลองออกจากระบบแล้วเข้าใหม่ และตรวจสอบว่าได้เลือกสิทธิ์ "See, edit, create, and delete all your Google Sheets spreadsheets"</p>}
+                          </div>
+                        )}
+                      </div>
                     )}
                     {result.calendarError && (
-                      <p className="mt-2 text-sm bg-amber-500/20 p-2 rounded-lg border border-amber-400/30 text-amber-100">
-                        ⚠️ สร้างกิจกรรมในปฏิทินไม่สำเร็จ: {result.calendarError}
-                      </p>
+                      <div className="mt-2 text-sm bg-amber-500/20 p-3 rounded-lg border border-amber-400/30 text-amber-100">
+                        <p className="font-bold flex items-center gap-2 mb-1">
+                          ⚠️ สร้างกิจกรรมในปฏิทินไม่สำเร็จ
+                        </p>
+                        <p className="mb-2 opacity-90">{result.calendarError}</p>
+                        
+                        {(result.calendarError.toLowerCase().includes('permission') || result.calendarError.toLowerCase().includes('scope')) && (
+                          <div className="mt-2 pt-2 border-t border-amber-400/20 text-xs space-y-1">
+                            <p className="font-semibold text-amber-200">วิธีแก้ไข:</p>
+                            <p>1. ลองออกจากระบบแล้วเข้าใหม่ และตรวจสอบว่าได้เลือกสิทธิ์จัดการปฏิทินทั้งหมด</p>
+                            <p>2. ตรวจสอบว่าบัญชีของคุณมีสิทธิ์สร้างกิจกรรมในปฏิทิน</p>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>

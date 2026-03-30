@@ -5,6 +5,9 @@ import multer from 'multer';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import fs from 'fs';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const pdf = require('pdf-parse');
 
 const app = express();
 const PORT = 3000;
@@ -224,7 +227,19 @@ app.get('/api/auth/status', (req, res) => {
   if (tokens) {
     res.json({ isAuthenticated: true, isServiceAccount: false });
   } else if (hasRefreshToken || isServiceAccountValid) {
-    res.json({ isAuthenticated: true, isServiceAccount: true });
+    let serviceAccountEmail = null;
+    if (isServiceAccountValid && serviceAccountJson) {
+      try {
+        let cleaned = serviceAccountJson.trim();
+        if (cleaned.startsWith("'") && cleaned.endsWith("'")) cleaned = cleaned.slice(1, -1);
+        if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+          try { cleaned = JSON.parse(cleaned); } catch(e) { cleaned = cleaned.slice(1, -1); }
+        }
+        const creds = typeof cleaned === 'string' ? JSON.parse(cleaned) : cleaned;
+        serviceAccountEmail = creds.client_email;
+      } catch (e) {}
+    }
+    res.json({ isAuthenticated: true, isServiceAccount: true, serviceAccountEmail });
   } else {
     res.json({ isAuthenticated: false, isServiceAccount: false });
   }
@@ -726,6 +741,29 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
       }
     }
     res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'No file uploaded' });
+
+  try {
+    const dataBuffer = fs.readFileSync(file.path);
+    const data = await pdf(dataBuffer);
+    
+    // Cleanup local file
+    if (fs.existsSync(file.path)) {
+      fs.unlinkSync(file.path);
+    }
+
+    res.json({ text: data.text });
+  } catch (error: any) {
+    console.error('PDF extraction error:', error);
+    if (file && fs.existsSync(file.path)) {
+      fs.unlinkSync(file.path);
+    }
+    res.status(500).json({ error: 'Failed to extract text from PDF: ' + error.message });
   }
 });
 
