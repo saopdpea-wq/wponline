@@ -981,12 +981,31 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     console.log('File read into buffer, length:', dataBuffer.length);
     
     // Fix for "DOMMatrix is not defined" error in Node.js
+    // We should use a more robust mock or a real polyfill if possible
     if (typeof (global as any).DOMMatrix === 'undefined') {
-      (global as any).DOMMatrix = class DOMMatrix {
-        constructor() {}
-        static fromFloat32Array() { return new DOMMatrix(); }
-        static fromFloat64Array() { return new DOMMatrix(); }
-      };
+      try {
+        // Try to get DOMMatrix from @napi-rs/canvas which is a dependency of pdf-parse
+        const canvas = await import('@napi-rs/canvas');
+        (global as any).DOMMatrix = (canvas as any).DOMMatrix;
+        console.log('DOMMatrix polyfilled from @napi-rs/canvas');
+      } catch (e) {
+        // Fallback to a slightly better mock if canvas import fails
+        console.warn('Failed to import @napi-rs/canvas for DOMMatrix, using mock');
+        (global as any).DOMMatrix = class DOMMatrix {
+          m11 = 1; m12 = 0; m13 = 0; m14 = 0;
+          m21 = 0; m22 = 1; m23 = 0; m24 = 0;
+          m31 = 0; m32 = 0; m33 = 1; m34 = 0;
+          m41 = 0; m42 = 0; m43 = 0; m44 = 1;
+          constructor() {}
+          static fromFloat32Array() { return new DOMMatrix(); }
+          static fromFloat64Array() { return new DOMMatrix(); }
+          multiply() { return this; }
+          inverse() { return this; }
+          translate() { return this; }
+          scale() { return this; }
+          rotate() { return this; }
+        };
+      }
     }
 
     console.log('Starting PDF extraction process...');
@@ -996,25 +1015,28 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
       // Try using pdf-parse first
       console.log('Attempting to use pdf-parse...');
       
-      let pdf: any = null;
-      try {
-        // Use createRequire for better CommonJS compatibility in ESM
-        const { createRequire } = await import('module');
-        const require = createRequire(import.meta.url);
-        pdf = require('pdf-parse');
-      } catch (requireError) {
-        console.warn('createRequire failed, trying dynamic import...', requireError);
-        const pdfModule: any = await import('pdf-parse');
-        pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
+      const pdfModule: any = await import('pdf-parse');
+      
+      // Check if it's the new version (Mehmet Kozan's) or the old version
+      if (pdfModule.PDFParse) {
+        console.log('Using new PDFParse API...');
+        const parser = new pdfModule.PDFParse({ data: dataBuffer });
+        const result = await parser.getText();
+        extractedText = result.text;
+        await parser.destroy();
+      } else {
+        // Old version or default export is a function
+        const pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
+        if (typeof pdf === 'function') {
+          console.log('Using legacy pdf-parse function API...');
+          const data = await pdf(dataBuffer);
+          extractedText = typeof data === 'string' ? data : (data as any).text || '';
+        } else {
+          throw new Error('PDF parser function/class not found in module');
+        }
       }
       
-      if (typeof pdf !== 'function') {
-        throw new Error('PDF parser function not found');
-      }
-
-      const data = await pdf(dataBuffer);
-      extractedText = typeof data === 'string' ? data : (data as any).text || '';
-      console.log('PDF parsed successfully with pdf-parse, length:', extractedText.length);
+      console.log('PDF parsed successfully, length:', extractedText.length);
     } catch (pdfError: any) {
       console.warn('pdf-parse failed or could not be initialized, falling back to Gemini AI...', pdfError.message);
       
