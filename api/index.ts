@@ -1020,6 +1020,41 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
       // Check if it's the new version (Mehmet Kozan's) or the old version
       if (pdfModule.PDFParse) {
         console.log('Using new PDFParse API...');
+        
+        // Fix for "Setting up fake worker failed" error
+        try {
+          const path = await import('path');
+          const { fileURLToPath } = await import('url');
+          
+          // Try to find the worker file in common locations
+          const possibleWorkerPaths = [
+            path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+            path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
+            // Fallback for some environments
+            '/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'
+          ];
+          
+          let workerPath = '';
+          const fs = await import('fs');
+          for (const p of possibleWorkerPaths) {
+            if (fs.existsSync(p)) {
+              workerPath = p;
+              break;
+            }
+          }
+          
+          if (workerPath) {
+            console.log('Setting PDF worker path to:', workerPath);
+            // Use file:// URL for ESM import compatibility in some environments
+            const workerUrl = `file://${workerPath}`;
+            pdfModule.PDFParse.setWorker(workerUrl);
+          } else {
+            console.warn('Could not find pdf.worker.mjs in expected locations');
+          }
+        } catch (workerSetupError) {
+          console.warn('Error during PDF worker setup:', workerSetupError);
+        }
+
         const parser = new pdfModule.PDFParse({ data: dataBuffer });
         const result = await parser.getText();
         extractedText = result.text;
