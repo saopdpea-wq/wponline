@@ -1013,82 +1013,28 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     
     try {
       // Try using pdf-parse first
-      console.log('Attempting to use pdf-parse...');
+      console.log('Attempting to use pdf-parse v1.1.1...');
       
       const pdfModule: any = await import('pdf-parse');
+      const pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
       
-      // Check if it's the new version (Mehmet Kozan's) or the old version
-      if (pdfModule.PDFParse) {
-        console.log('Using new PDFParse API...');
-        
-        // Fix for "Setting up fake worker failed" error
-        try {
-          let workerUrl = '';
-          
-          const path = await import('path');
-          const fs = await import('fs');
-          const { pathToFileURL, fileURLToPath } = await import('url');
-          
-          // Get current directory
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = path.dirname(__filename);
-          
-          // Try to find local worker file in multiple possible locations
-          const possiblePaths = [
-            // Relative to current file
-            path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
-            path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
-            // Absolute from process root
-            path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
-            path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
-            // Vercel specific
-            '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
-            '/var/task/node_modules/pdfjs-dist/build/pdf.worker.mjs'
-          ];
-          
-          for (const p of possiblePaths) {
-            try {
-              if (fs.existsSync(p)) {
-                workerUrl = pathToFileURL(p).href;
-                console.log('Found PDF worker at:', p);
-                console.log('Converted to URL:', workerUrl);
-                break;
-              }
-            } catch (e) {}
-          }
-          
-          if (workerUrl) {
-            console.log('Setting PDF worker to:', workerUrl);
-            try {
-              pdfModule.PDFParse.setWorker(workerUrl);
-            } catch (setWorkerError) {
-              console.warn('pdfModule.PDFParse.setWorker failed, continuing...', setWorkerError);
-            }
-          } else {
-            console.warn('Could not find pdf.worker.mjs, pdf-parse will attempt to use fake worker');
-          }
-        } catch (workerSetupError) {
-          console.warn('Error during PDF worker setup:', workerSetupError);
-        }
-
+      if (typeof pdf === 'function') {
+        console.log('Using standard pdf-parse function API...');
+        const data = await pdf(dataBuffer);
+        extractedText = data.text || '';
+      } else if (pdfModule.PDFParse) {
+        // Fallback for newer version if still present
+        console.log('Using new PDFParse API (fallback)...');
         const parser = new pdfModule.PDFParse({ 
           data: dataBuffer,
-          disableWorker: true, // Still use disableWorker for better stability in serverless
+          disableWorker: true,
           verbosity: 0
         });
         const result = await parser.getText();
         extractedText = result.text;
         await parser.destroy();
       } else {
-        // Old version or default export is a function
-        const pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
-        if (typeof pdf === 'function') {
-          console.log('Using legacy pdf-parse function API...');
-          const data = await pdf(dataBuffer);
-          extractedText = typeof data === 'string' ? data : (data as any).text || '';
-        } else {
-          throw new Error('PDF parser function/class not found in module');
-        }
+        throw new Error('PDF parser function/class not found in module');
       }
       
       console.log('PDF parsed successfully, length:', extractedText.length);
