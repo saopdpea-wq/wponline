@@ -1027,47 +1027,45 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
           
           const path = await import('path');
           const fs = await import('fs');
+          const { pathToFileURL, fileURLToPath } = await import('url');
           
-          // Try to find local worker file first
+          // Get current directory
+          const __filename = fileURLToPath(import.meta.url);
+          const __dirname = path.dirname(__filename);
+          
+          // Try to find local worker file in multiple possible locations
           const possiblePaths = [
+            // Relative to current file
+            path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+            path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
+            // Absolute from process root
             path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
             path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
-            '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'
+            // Vercel specific
+            '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
+            '/var/task/node_modules/pdfjs-dist/build/pdf.worker.mjs'
           ];
           
-          let workerContent = null;
           for (const p of possiblePaths) {
-            if (fs.existsSync(p)) {
-              try {
-                workerContent = fs.readFileSync(p);
-                console.log('Found PDF worker locally at:', p);
-                break;
-              } catch (e) {}
-            }
-          }
-          
-          if (workerContent) {
-            workerUrl = `data:application/javascript;base64,${workerContent.toString('base64')}`;
-          } else if (process.env.VERCEL) {
-            // Fallback for Vercel: Fetch from CDN and convert to Data URI
             try {
-              console.log('Worker not found locally, fetching from CDN to create Data URI...');
-              const response = await fetch('https://unpkg.com/pdfjs-dist@5.4.296/legacy/build/pdf.worker.mjs');
-              if (response.ok) {
-                const text = await response.text();
-                workerUrl = `data:application/javascript;base64,${Buffer.from(text).toString('base64')}`;
-                console.log('Successfully created Data URI from CDN');
+              if (fs.existsSync(p)) {
+                workerUrl = pathToFileURL(p).href;
+                console.log('Found PDF worker at:', p);
+                console.log('Converted to URL:', workerUrl);
+                break;
               }
-            } catch (cdnError) {
-              console.error('Failed to fetch worker from CDN:', cdnError);
-            }
+            } catch (e) {}
           }
           
           if (workerUrl) {
-            console.log('Setting PDF worker via Data URI (length: ' + workerUrl.length + ')');
-            pdfModule.PDFParse.setWorker(workerUrl);
+            console.log('Setting PDF worker to:', workerUrl);
+            try {
+              pdfModule.PDFParse.setWorker(workerUrl);
+            } catch (setWorkerError) {
+              console.warn('pdfModule.PDFParse.setWorker failed, continuing...', setWorkerError);
+            }
           } else {
-            console.warn('Could not create PDF worker URL, attempting to use default');
+            console.warn('Could not find pdf.worker.mjs, pdf-parse will attempt to use fake worker');
           }
         } catch (workerSetupError) {
           console.warn('Error during PDF worker setup:', workerSetupError);
@@ -1075,7 +1073,7 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
 
         const parser = new pdfModule.PDFParse({ 
           data: dataBuffer,
-          disableWorker: true,
+          disableWorker: true, // Still use disableWorker for better stability in serverless
           verbosity: 0
         });
         const result = await parser.getText();
