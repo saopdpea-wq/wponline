@@ -1023,70 +1023,65 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
         
         // Fix for "Setting up fake worker failed" error
         try {
-          // Use import.meta.resolve to get the absolute file:// URL
-          // This is the most reliable way in ESM environments like Vercel
           let workerUrl = '';
           
-          try {
-            // @ts-ignore - import.meta.resolve is available in Node 20+
-            workerUrl = import.meta.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-            console.log('Resolved PDF worker URL via import.meta.resolve:', workerUrl);
-          } catch (resolveError) {
-            console.warn('import.meta.resolve failed, falling back to manual path construction:', resolveError);
-            
-            const path = await import('path');
-            const fs = await import('fs');
-            const { fileURLToPath } = await import('url');
-            
-            // Get current file directory in ESM
-            const __filename = fileURLToPath(import.meta.url);
-            const __dirname = path.dirname(__filename);
-            
-            // Try to find the worker file in common locations
-            const possibleWorkerPaths = [
-              // Relative to current file (api/index.ts)
-              path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
-              path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
-              // Absolute paths
-              path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
-              path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
-              // Vercel specific paths
-              '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
-              '/var/task/node_modules/pdfjs-dist/build/pdf.worker.mjs'
-            ];
-            
-            for (const p of possibleWorkerPaths) {
-              try {
-                if (fs.existsSync(p)) {
-                  workerUrl = `file://${p}`;
-                  console.log('Found PDF worker at manual path:', p);
-                  break;
-                }
-              } catch (e) {
-                // Ignore errors for individual path checks
+          // On Vercel, using a CDN is the most reliable way to ensure the worker is found
+          if (process.env.VERCEL) {
+            workerUrl = 'https://unpkg.com/pdfjs-dist@5.4.296/legacy/build/pdf.worker.mjs';
+            console.log('Using CDN for PDF worker on Vercel:', workerUrl);
+          } else {
+            try {
+              // @ts-ignore - import.meta.resolve is available in Node 20+
+              workerUrl = import.meta.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+              console.log('Resolved PDF worker URL via import.meta.resolve:', workerUrl);
+            } catch (resolveError) {
+              console.warn('import.meta.resolve failed, falling back to manual path construction:', resolveError);
+              
+              const path = await import('path');
+              const fs = await import('fs');
+              const { fileURLToPath } = await import('url');
+              
+              const __filename = fileURLToPath(import.meta.url);
+              const __dirname = path.dirname(__filename);
+              
+              const possibleWorkerPaths = [
+                path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+                path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
+                path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+                path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs')
+              ];
+              
+              for (const p of possibleWorkerPaths) {
+                try {
+                  if (fs.existsSync(p)) {
+                    workerUrl = `file://${p}`;
+                    console.log('Found PDF worker at manual path:', p);
+                    break;
+                  }
+                } catch (e) {}
               }
             }
           }
           
           if (workerUrl) {
-            // Ensure the URL is properly formatted for pdfjs
-            // If it's already a file:// URL, keep it. If it's an absolute path, add file://
-            if (!workerUrl.startsWith('file://') && !workerUrl.startsWith('http')) {
-              // On Unix-like systems (Vercel), absolute paths start with /
-              // so file://${workerUrl} becomes file:///path/to/worker
+            // Ensure proper file:// protocol for local paths on Unix
+            if (workerUrl.startsWith('/') && !workerUrl.startsWith('file://') && !workerUrl.startsWith('http')) {
               workerUrl = `file://${workerUrl}`;
             }
-            
             console.log('Final PDF worker URL being set:', workerUrl);
             pdfModule.PDFParse.setWorker(workerUrl);
           } else {
-            console.warn('Could not find pdf.worker.mjs in any expected location');
+            console.warn('Could not find pdf.worker.mjs, pdf-parse will attempt to use fake worker');
           }
         } catch (workerSetupError) {
           console.warn('Error during PDF worker setup:', workerSetupError);
         }
 
-        const parser = new pdfModule.PDFParse({ data: dataBuffer });
+        const parser = new pdfModule.PDFParse({ 
+          data: dataBuffer,
+          disableWorker: true, // Use fake worker to avoid some path issues
+          verbosity: 0
+        });
         const result = await parser.getText();
         extractedText = result.text;
         await parser.destroy();
