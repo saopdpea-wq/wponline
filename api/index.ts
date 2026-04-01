@@ -1012,61 +1012,85 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     let extractedText = '';
     
     try {
-      // Try using pdf-parse first
-      console.log('Attempting to use pdf-parse v1.1.1...');
+      // Use pdfjs-dist directly for more stability on Vercel
+      console.log('Attempting to use pdfjs-dist directly...');
       
-      const pdfModule: any = await import('pdf-parse');
-      const pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
+      const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
       
-      if (typeof pdf === 'function') {
-        console.log('Using standard pdf-parse function API...');
-        const data = await pdf(dataBuffer);
-        extractedText = data.text || '';
-      } else if (pdfModule.PDFParse) {
-        // Fallback for newer version if still present
-        console.log('Using new PDFParse API (fallback)...');
-        const parser = new pdfModule.PDFParse({ 
-          data: dataBuffer,
-          disableWorker: true,
-          verbosity: 0
-        });
-        const result = await parser.getText();
-        extractedText = result.text;
-        await parser.destroy();
-      } else {
-        throw new Error('PDF parser function/class not found in module');
+      // Load the PDF document
+      const loadingTask = pdfjs.getDocument({
+        data: new Uint8Array(dataBuffer),
+        disableWorker: true,
+        verbosity: 0
+      });
+      
+      const pdfDocument = await loadingTask.promise;
+      let fullText = '';
+      
+      // Iterate through each page and extract text
+      for (let i = 1; i <= pdfDocument.numPages; i++) {
+        const page = await pdfDocument.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+          .map((item: any) => item.str)
+          .join(' ');
+        fullText += pageText + '\n';
       }
       
-      console.log('PDF parsed successfully, length:', extractedText.length);
+      extractedText = fullText;
+      console.log('PDF parsed successfully using pdfjs-dist, length:', extractedText.length);
     } catch (pdfError: any) {
-      console.warn('pdf-parse failed or could not be initialized, falling back to Gemini AI...', pdfError.message);
+      console.warn('pdfjs-dist failed, falling back to pdf-parse...', pdfError.message);
       
-      // Fallback to Gemini AI for PDF extraction
-      if (process.env.GEMINI_API_KEY) {
-        try {
-          const { GoogleGenAI } = await import('@google/genai');
-          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-          
-          const result = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: [{
-              parts: [
-                { text: "Extract all text from this PDF document accurately." },
-                { inlineData: { data: dataBuffer.toString('base64'), mimeType: "application/pdf" } }
-              ]
-            }]
-          });
-          
-          extractedText = result.text || '';
-          console.log('PDF extracted successfully using Gemini AI fallback, length:', extractedText.length);
-        } catch (aiError: any) {
-          console.error('Gemini AI fallback also failed:', aiError.message);
-          throw new Error('ทั้งระบบสกัดข้อความปกติและ AI ไม่สามารถอ่านไฟล์นี้ได้: ' + aiError.message);
+      try {
+        const pdfModule: any = await import('pdf-parse');
+        const pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
+        
+        if (typeof pdf === 'function') {
+          console.log('Using legacy pdf-parse function API...');
+          const data = await pdf(dataBuffer);
+          extractedText = data.text || '';
+        } else {
+          throw new Error('PDF parser function not found');
         }
-      } else {
-        throw new Error('ระบบสกัดข้อความปกติขัดข้อง และไม่มี AI Key สำหรับระบบสำรอง: ' + pdfError.message);
+      } catch (innerPdfError: any) {
+        console.warn('pdf-parse also failed, falling back to Gemini AI...', innerPdfError.message);
+        
+        // Fallback to Gemini AI for PDF extraction
+        if (process.env.GEMINI_API_KEY) {
+          try {
+            const { GoogleGenAI } = await import('@google/genai');
+            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+            
+            const result = await ai.models.generateContent({
+              model: "gemini-3-flash-preview",
+              contents: [{
+                parts: [
+                  { text: "Extract all text from this PDF document accurately." },
+                  { inlineData: { data: dataBuffer.toString('base64'), mimeType: "application/pdf" } }
+                ]
+              }]
+            });
+            
+            extractedText = result.text || '';
+            console.log('PDF extracted successfully using Gemini AI fallback, length:', extractedText.length);
+          } catch (aiError: any) {
+            console.error('Gemini AI fallback also failed:', aiError.message);
+            throw new Error('ทั้งระบบสกัดข้อความปกติและ AI ไม่สามารถอ่านไฟล์นี้ได้: ' + aiError.message);
+          }
+        } else {
+          throw new Error('ระบบสกัดข้อความปกติขัดข้อง และไม่มี AI Key สำหรับระบบสำรอง: ' + innerPdfError.message);
+        }
       }
     }
+    
+    // Remove the fallback block since it's now integrated above
+    /*
+    } catch (pdfError: any) {
+      console.warn('pdf-parse failed or could not be initialized, falling back to Gemini AI...', pdfError.message);
+      ...
+    }
+    */
     
     // Cleanup local file
     if (fs.existsSync(file.path)) {
