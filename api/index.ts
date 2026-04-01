@@ -1023,33 +1023,64 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
         
         // Fix for "Setting up fake worker failed" error
         try {
-          const path = await import('path');
-          const { fileURLToPath } = await import('url');
+          // Use import.meta.resolve to get the absolute file:// URL
+          // This is the most reliable way in ESM environments like Vercel
+          let workerUrl = '';
           
-          // Try to find the worker file in common locations
-          const possibleWorkerPaths = [
-            path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
-            path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
-            // Fallback for some environments
-            '/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'
-          ];
-          
-          let workerPath = '';
-          const fs = await import('fs');
-          for (const p of possibleWorkerPaths) {
-            if (fs.existsSync(p)) {
-              workerPath = p;
-              break;
+          try {
+            // @ts-ignore - import.meta.resolve is available in Node 20+
+            workerUrl = import.meta.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+            console.log('Resolved PDF worker URL via import.meta.resolve:', workerUrl);
+          } catch (resolveError) {
+            console.warn('import.meta.resolve failed, falling back to manual path construction:', resolveError);
+            
+            const path = await import('path');
+            const fs = await import('fs');
+            const { fileURLToPath } = await import('url');
+            
+            // Get current file directory in ESM
+            const __filename = fileURLToPath(import.meta.url);
+            const __dirname = path.dirname(__filename);
+            
+            // Try to find the worker file in common locations
+            const possibleWorkerPaths = [
+              // Relative to current file (api/index.ts)
+              path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+              path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
+              // Absolute paths
+              path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+              path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
+              // Vercel specific paths
+              '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
+              '/var/task/node_modules/pdfjs-dist/build/pdf.worker.mjs'
+            ];
+            
+            for (const p of possibleWorkerPaths) {
+              try {
+                if (fs.existsSync(p)) {
+                  workerUrl = `file://${p}`;
+                  console.log('Found PDF worker at manual path:', p);
+                  break;
+                }
+              } catch (e) {
+                // Ignore errors for individual path checks
+              }
             }
           }
           
-          if (workerPath) {
-            console.log('Setting PDF worker path to:', workerPath);
-            // Use file:// URL for ESM import compatibility in some environments
-            const workerUrl = `file://${workerPath}`;
+          if (workerUrl) {
+            // Ensure the URL is properly formatted for pdfjs
+            // If it's already a file:// URL, keep it. If it's an absolute path, add file://
+            if (!workerUrl.startsWith('file://') && !workerUrl.startsWith('http')) {
+              // On Unix-like systems (Vercel), absolute paths start with /
+              // so file://${workerUrl} becomes file:///path/to/worker
+              workerUrl = `file://${workerUrl}`;
+            }
+            
+            console.log('Final PDF worker URL being set:', workerUrl);
             pdfModule.PDFParse.setWorker(workerUrl);
           } else {
-            console.warn('Could not find pdf.worker.mjs in expected locations');
+            console.warn('Could not find pdf.worker.mjs in any expected location');
           }
         } catch (workerSetupError) {
           console.warn('Error during PDF worker setup:', workerSetupError);
