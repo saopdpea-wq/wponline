@@ -1015,6 +1015,7 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
       // Use pdfjs-dist directly for more stability on Vercel
       console.log('Attempting to use pdfjs-dist directly...');
       
+      // Import the legacy build which is more compatible with Node.js environments
       const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
       
       // Load the PDF document
@@ -1032,55 +1033,45 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
         const page = await pdfDocument.getPage(i);
         const textContent = await page.getTextContent();
         const pageText = textContent.items
-          .map((item: any) => item.str)
+          .map((item: any) => (item as any).str || '')
           .join(' ');
         fullText += pageText + '\n';
       }
       
-      extractedText = fullText;
+      extractedText = fullText.trim();
+      
+      if (!extractedText) {
+        throw new Error('สกัดข้อความออกมาได้เป็นค่าว่าง (ไฟล์อาจจะเป็นรูปภาพหรือถูกล็อกไว้)');
+      }
+      
       console.log('PDF parsed successfully using pdfjs-dist, length:', extractedText.length);
     } catch (pdfError: any) {
-      console.warn('pdfjs-dist failed, falling back to pdf-parse...', pdfError.message);
+      console.warn('pdfjs-dist failed, attempting Gemini AI fallback...', pdfError.message);
       
-      try {
-        const pdfModule: any = await import('pdf-parse');
-        const pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
-        
-        if (typeof pdf === 'function') {
-          console.log('Using legacy pdf-parse function API...');
-          const data = await pdf(dataBuffer);
-          extractedText = data.text || '';
-        } else {
-          throw new Error('PDF parser function not found');
+      // Fallback to Gemini AI for PDF extraction
+      if (process.env.GEMINI_API_KEY) {
+        try {
+          const { GoogleGenAI } = await import('@google/genai');
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+          
+          const result = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: [{
+              parts: [
+                { text: "Extract all text from this PDF document accurately. If it's a scanned document, use OCR to get the text." },
+                { inlineData: { data: dataBuffer.toString('base64'), mimeType: "application/pdf" } }
+              ]
+            }]
+          });
+          
+          extractedText = result.text || '';
+          console.log('PDF extracted successfully using Gemini AI fallback, length:', extractedText.length);
+        } catch (aiError: any) {
+          console.error('Gemini AI fallback also failed:', aiError.message);
+          throw new Error('ทั้งระบบปกติและ AI ไม่สามารถอ่านไฟล์นี้ได้: ' + aiError.message);
         }
-      } catch (innerPdfError: any) {
-        console.warn('pdf-parse also failed, falling back to Gemini AI...', innerPdfError.message);
-        
-        // Fallback to Gemini AI for PDF extraction
-        if (process.env.GEMINI_API_KEY) {
-          try {
-            const { GoogleGenAI } = await import('@google/genai');
-            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-            
-            const result = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
-              contents: [{
-                parts: [
-                  { text: "Extract all text from this PDF document accurately." },
-                  { inlineData: { data: dataBuffer.toString('base64'), mimeType: "application/pdf" } }
-                ]
-              }]
-            });
-            
-            extractedText = result.text || '';
-            console.log('PDF extracted successfully using Gemini AI fallback, length:', extractedText.length);
-          } catch (aiError: any) {
-            console.error('Gemini AI fallback also failed:', aiError.message);
-            throw new Error('ทั้งระบบสกัดข้อความปกติและ AI ไม่สามารถอ่านไฟล์นี้ได้: ' + aiError.message);
-          }
-        } else {
-          throw new Error('ระบบสกัดข้อความปกติขัดข้อง และไม่มี AI Key สำหรับระบบสำรอง: ' + innerPdfError.message);
-        }
+      } else {
+        throw new Error('ระบบสกัดข้อความปกติขัดข้อง และคุณยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Vercel (Error: ' + pdfError.message + ')');
       }
     }
     
