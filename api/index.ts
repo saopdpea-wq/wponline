@@ -1008,70 +1008,77 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
       }
     }
 
+    // Support different case variations for the API key from Vercel
+    const geminiKey = process.env.GEMINI_API_KEY || process.env.Gemini_API_Key || process.env.gemini_api_key;
+    
     console.log('Starting PDF extraction process...');
+    console.log('Gemini API Key found:', geminiKey ? 'Yes' : 'No');
     let extractedText = '';
     
-    try {
-      // Use pdfjs-dist directly for more stability on Vercel
-      console.log('Attempting to use pdfjs-dist directly...');
-      
-      // Import the legacy build which is more compatible with Node.js environments
-      const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
-      
-      // Load the PDF document
-      const loadingTask = pdfjs.getDocument({
-        data: new Uint8Array(dataBuffer),
-        disableWorker: true,
-        verbosity: 0
-      });
-      
-      const pdfDocument = await loadingTask.promise;
-      let fullText = '';
-      
-      // Iterate through each page and extract text
-      for (let i = 1; i <= pdfDocument.numPages; i++) {
-        const page = await pdfDocument.getPage(i);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items
-          .map((item: any) => (item as any).str || '')
-          .join(' ');
-        fullText += pageText + '\n';
-      }
-      
-      extractedText = fullText.trim();
-      
-      if (!extractedText) {
-        throw new Error('สกัดข้อความออกมาได้เป็นค่าว่าง (ไฟล์อาจจะเป็นรูปภาพหรือถูกล็อกไว้)');
-      }
-      
-      console.log('PDF parsed successfully using pdfjs-dist, length:', extractedText.length);
-    } catch (pdfError: any) {
-      console.warn('pdfjs-dist failed, attempting Gemini AI fallback...', pdfError.message);
-      
-      // Fallback to Gemini AI for PDF extraction
-      if (process.env.GEMINI_API_KEY) {
-        try {
-          const { GoogleGenAI } = await import('@google/genai');
-          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-          
-          const result = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: [{
-              parts: [
-                { text: "Extract all text from this PDF document accurately. If it's a scanned document, use OCR to get the text." },
-                { inlineData: { data: dataBuffer.toString('base64'), mimeType: "application/pdf" } }
-              ]
-            }]
-          });
-          
-          extractedText = result.text || '';
-          console.log('PDF extracted successfully using Gemini AI fallback, length:', extractedText.length);
-        } catch (aiError: any) {
-          console.error('Gemini AI fallback also failed:', aiError.message);
-          throw new Error('ทั้งระบบปกติและ AI ไม่สามารถอ่านไฟล์นี้ได้: ' + aiError.message);
+    // If Gemini API Key is available, prioritize it as it's more reliable on Vercel
+    if (geminiKey) {
+      try {
+        console.log('Prioritizing Gemini AI for PDF extraction...');
+        const { GoogleGenAI } = await import('@google/genai');
+        const ai = new GoogleGenAI({ apiKey: geminiKey });
+        
+        const result = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: [{
+            parts: [
+              { text: "Extract all text from this PDF document accurately. If it's a scanned document, use OCR to get the text." },
+              { inlineData: { data: dataBuffer.toString('base64'), mimeType: "application/pdf" } }
+            ]
+          }]
+        });
+        
+        extractedText = result.text || '';
+        if (extractedText) {
+          console.log('PDF extracted successfully using Gemini AI, length:', extractedText.length);
+          // If successful, we can skip the local parser
         }
-      } else {
-        throw new Error('ระบบสกัดข้อความปกติขัดข้อง และคุณยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Vercel (Error: ' + pdfError.message + ')');
+      } catch (aiError: any) {
+        console.warn('Gemini AI extraction failed, falling back to local parser...', aiError.message);
+      }
+    }
+
+    // If Gemini failed or wasn't available, try local parser
+    if (!extractedText) {
+      try {
+        console.log('Attempting to use local pdfjs-dist parser...');
+        
+        // Use a more robust way to load pdfjs on Vercel
+        const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        
+        // Load the PDF document
+        const loadingTask = pdfjs.getDocument({
+          data: new Uint8Array(dataBuffer),
+          disableWorker: true,
+          verbosity: 0
+        });
+        
+        const pdfDocument = await loadingTask.promise;
+        let fullText = '';
+        
+        for (let i = 1; i <= pdfDocument.numPages; i++) {
+          const page = await pdfDocument.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items
+            .map((item: any) => (item as any).str || '')
+            .join(' ');
+          fullText += pageText + '\n';
+        }
+        
+        extractedText = fullText.trim();
+        console.log('PDF parsed successfully using local pdfjs-dist, length:', extractedText.length);
+      } catch (pdfError: any) {
+        console.error('Local parser also failed:', pdfError.message);
+        
+        if (geminiKey) {
+          throw new Error('ไม่สามารถอ่านไฟล์ PDF ได้ทั้งระบบปกติและ AI: ' + pdfError.message);
+        } else {
+          throw new Error('ระบบสกัดข้อความปกติขัดข้อง และคุณยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Vercel ให้ถูกต้อง (ชื่อที่แนะนำคือ GEMINI_API_KEY ตัวพิมพ์ใหญ่ทั้งหมด)');
+        }
       }
     }
     
