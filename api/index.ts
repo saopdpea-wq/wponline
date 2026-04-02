@@ -1008,11 +1008,14 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
       }
     }
 
-    // Support different case variations for the API key from Vercel
-    const geminiKey = process.env.GEMINI_API_KEY || process.env.Gemini_API_Key || process.env.gemini_api_key;
+    // Support different case variations for the API key from Vercel and trim whitespace
+    let geminiKey = process.env.GEMINI_API_KEY || process.env.Gemini_API_Key || process.env.gemini_api_key;
+    if (geminiKey) {
+      geminiKey = geminiKey.trim();
+    }
     
     console.log('Starting PDF extraction process...');
-    console.log('Gemini API Key found:', geminiKey ? 'Yes' : 'No');
+    console.log('Gemini API Key found:', geminiKey ? 'Yes (Length: ' + geminiKey.length + ')' : 'No');
     let extractedText = '';
     
     // If Gemini API Key is available, prioritize it as it's more reliable on Vercel
