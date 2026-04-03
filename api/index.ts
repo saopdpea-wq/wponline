@@ -1008,14 +1008,37 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
       }
     }
 
-    // Support different case variations for the API key from Vercel and trim whitespace
-    let geminiKey = process.env.GEMINI_API_KEY || process.env.Gemini_API_Key || process.env.gemini_api_key;
-    if (geminiKey) {
-      geminiKey = geminiKey.trim();
+    // Robust API key detection: try multiple names and validate format
+    const keysToTry = ['GEMINI_API_KEY', 'Gemini_API_Key', 'gemini_api_key', 'API_KEY'];
+    let geminiKey = '';
+    let usedVarName = '';
+    
+    for (const keyName of keysToTry) {
+      const val = process.env[keyName];
+      // Check if value exists, is not a placeholder, and has a reasonable length
+      if (val && typeof val === 'string' && val.trim().length > 10) {
+        const trimmed = val.trim();
+        // Google API keys usually start with 'AIza'
+        if (trimmed.startsWith('AIza')) {
+          geminiKey = trimmed;
+          usedVarName = keyName;
+          break;
+        }
+      }
     }
     
     console.log('Starting PDF extraction process...');
-    console.log('Gemini API Key found:', geminiKey ? 'Yes (Length: ' + geminiKey.length + ')' : 'No');
+    if (geminiKey) {
+      console.log(`Using Gemini API Key from environment variable: ${usedVarName} (Length: ${geminiKey.length})`);
+    } else {
+      console.log('No valid Gemini API Key found in environment variables.');
+      // Log what we found for debugging (without values)
+      keysToTry.forEach(k => {
+        const v = process.env[k];
+        if (v) console.log(`- Found ${k} but it was invalid or empty (Length: ${v.length})`);
+      });
+    }
+    
     let extractedText = '';
     
     // If Gemini API Key is available, prioritize it as it's more reliable on Vercel
