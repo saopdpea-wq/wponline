@@ -554,11 +554,26 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     } catch (sheetErr: any) {
       console.error('Error getting spreadsheet info:', sheetErr.message);
       // If we can't even get the spreadsheet info, it's likely a permission or ID issue
-      if (sheetErr.code === 404) throw new Error(`Spreadsheet not found. Please check GOOGLE_SHEET_ID: ${cleanSpreadsheetId}`);
-      if (sheetErr.code === 403) throw new Error(`Permission denied for Spreadsheet. Please share it with the Service Account or ensure you are logged in with the right account.`);
+      if (sheetErr.code === 404) {
+        return res.status(404).json({ 
+          success: false,
+          error: `ไม่พบไฟล์ Google Sheet กรุณาตรวจสอบ GOOGLE_SHEET_ID: ${cleanSpreadsheetId}` 
+        });
+      }
+      if (sheetErr.code === 403) {
+        return res.status(403).json({ 
+          success: false,
+          needsReauth: true,
+          error: `The caller does not have permission: คุณไม่มีสิทธิ์เขียนไฟล์ Google Sheet นี้ หรือยังไม่ได้เลือกสิทธิ์ "ดูและแก้ไขสเปรดชีต" ตอน Login` 
+        });
+      }
       
       // Fallback to default if it's some other error
-      finalWpNumber = await getNextWpNumber(sheets, cleanSpreadsheetId, 'Sheet1');
+      try {
+        finalWpNumber = await getNextWpNumber(sheets, cleanSpreadsheetId, 'Sheet1');
+      } catch (e) {
+        console.error('Fallback getNextWpNumber failed:', e.message);
+      }
     }
 
     console.log(`Generated final WP number: ${finalWpNumber} using sheet: ${sheetName}`);
