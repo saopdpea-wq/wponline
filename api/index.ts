@@ -146,31 +146,49 @@ async function getNextWpNumber(sheets: any, spreadsheetId: string, sheetName: st
 }
 
 const getAuthClient = async (req?: any) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET;
+
   // 1. Try User OAuth tokens from cookies first (User override)
   const tokens = req?.cookies?.google_tokens;
-  if (tokens) {
+  if (tokens && clientId && clientSecret) {
     try {
       const auth = getOAuth2Client(req);
       if (auth) {
-        auth.setCredentials(JSON.parse(tokens));
+        const parsedTokens = JSON.parse(tokens);
+        auth.setCredentials(parsedTokens);
+        
+        // Check if token is expired and refresh if needed
+        if (parsedTokens.expiry_date && parsedTokens.expiry_date <= Date.now()) {
+          console.log('User token expired, attempting refresh...');
+          const { tokens: refreshedTokens } = await auth.refreshAccessToken();
+          auth.setCredentials(refreshedTokens);
+          // Note: We can't easily update the cookie here without the 'res' object, 
+          // but the current request will work.
+        }
+        console.log('Using authentication from User Cookies');
         return auth;
       }
-    } catch (e) {
-      console.error('Error parsing user tokens:', e);
+    } catch (e: any) {
+      console.error('Error with user tokens:', e.message);
     }
   }
 
   // 2. Try Refresh Token from Environment Variables (Always Connected - OAuth method)
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-  if (refreshToken) {
+  if (refreshToken && clientId && clientSecret) {
     try {
       const auth = getOAuth2Client(req);
       if (auth) {
         auth.setCredentials({ refresh_token: refreshToken });
+        // Force a refresh to get a valid access token immediately
+        console.log('Using GOOGLE_REFRESH_TOKEN from Env, refreshing access token...');
+        const { tokens: refreshedTokens } = await auth.refreshAccessToken();
+        auth.setCredentials(refreshedTokens);
         return auth;
       }
-    } catch (e) {
-      console.error('Error using GOOGLE_REFRESH_TOKEN:', e);
+    } catch (e: any) {
+      console.error('Error using GOOGLE_REFRESH_TOKEN:', e.message);
     }
   }
 
@@ -178,17 +196,15 @@ const getAuthClient = async (req?: any) => {
   let serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (serviceAccountJson) {
     try {
-      // Clean up the string in case it has extra quotes or escaped characters from env
+      console.log('Attempting to use Service Account authentication...');
       serviceAccountJson = serviceAccountJson.trim();
       if (serviceAccountJson.startsWith("'") && serviceAccountJson.endsWith("'")) {
         serviceAccountJson = serviceAccountJson.slice(1, -1);
       }
       if (serviceAccountJson.startsWith('"') && serviceAccountJson.endsWith('"')) {
         try {
-          // If it's double-quoted, it might be a JSON-stringified string
           serviceAccountJson = JSON.parse(serviceAccountJson);
         } catch (e) {
-          // If parse fails, just use the sliced version
           serviceAccountJson = serviceAccountJson.slice(1, -1);
         }
       }
@@ -198,12 +214,15 @@ const getAuthClient = async (req?: any) => {
         credentials,
         scopes: SCOPES,
       });
-      return await auth.getClient();
+      const client = await auth.getClient();
+      console.log('Using Service Account authentication');
+      return client;
     } catch (e: any) {
-      console.error('Invalid GOOGLE_SERVICE_ACCOUNT_JSON or error getting client:', e.message);
+      console.error('Service Account authentication failed:', e.message);
     }
   }
 
+  console.warn('No valid authentication method found');
   return null;
 };
 
