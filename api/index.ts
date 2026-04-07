@@ -161,10 +161,15 @@ const getAuthClient = async (req?: any) => {
         // Check if token is expired and refresh if needed
         if (parsedTokens.expiry_date && parsedTokens.expiry_date <= Date.now()) {
           console.log('User token expired, attempting refresh...');
-          const { tokens: refreshedTokens } = await auth.refreshAccessToken();
-          auth.setCredentials(refreshedTokens);
-          // Note: We can't easily update the cookie here without the 'res' object, 
-          // but the current request will work.
+          const refreshResponse = await auth.refreshAccessToken();
+          if (refreshResponse && refreshResponse.tokens) {
+            // Merge new tokens with old ones to keep the refresh_token
+            const newTokens = { ...parsedTokens, ...refreshResponse.tokens };
+            auth.setCredentials(newTokens);
+            console.log('User token refreshed successfully');
+          } else {
+            console.warn('Refresh response did not contain tokens');
+          }
         }
         console.log('Using authentication from User Cookies');
         return auth;
@@ -183,9 +188,18 @@ const getAuthClient = async (req?: any) => {
         auth.setCredentials({ refresh_token: refreshToken });
         // Force a refresh to get a valid access token immediately
         console.log('Using GOOGLE_REFRESH_TOKEN from Env, refreshing access token...');
-        const { tokens: refreshedTokens } = await auth.refreshAccessToken();
-        auth.setCredentials(refreshedTokens);
-        return auth;
+        const refreshResponse = await auth.refreshAccessToken();
+        if (refreshResponse && refreshResponse.tokens) {
+          // Merge to ensure refresh_token is preserved
+          auth.setCredentials({ 
+            refresh_token: refreshToken, 
+            ...refreshResponse.tokens 
+          });
+          console.log('Env refresh token used successfully');
+          return auth;
+        } else {
+          console.error('Failed to get tokens from refreshAccessToken using Env Refresh Token. This usually means the GOOGLE_REFRESH_TOKEN is invalid, expired, or the Client ID/Secret do not match.');
+        }
       }
     } catch (e: any) {
       console.error('Error using GOOGLE_REFRESH_TOKEN:', e.message);
@@ -197,19 +211,30 @@ const getAuthClient = async (req?: any) => {
   if (serviceAccountJson) {
     try {
       console.log('Attempting to use Service Account authentication...');
-      serviceAccountJson = serviceAccountJson.trim();
-      if (serviceAccountJson.startsWith("'") && serviceAccountJson.endsWith("'")) {
-        serviceAccountJson = serviceAccountJson.slice(1, -1);
+      let cleaned = serviceAccountJson.trim();
+      
+      // Ultra-robust cleaning: Remove any leading/trailing non-JSON characters
+      // This handles cases where people might paste "- { ... }" or other noise
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
       }
-      if (serviceAccountJson.startsWith('"') && serviceAccountJson.endsWith('"')) {
+
+      // Handle potential wrapping in quotes
+      if (cleaned.startsWith("'") && cleaned.endsWith("'")) cleaned = cleaned.slice(1, -1);
+      if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
         try {
-          serviceAccountJson = JSON.parse(serviceAccountJson);
+          const parsed = JSON.parse(cleaned);
+          if (typeof parsed === 'object') cleaned = JSON.stringify(parsed);
+          else if (typeof parsed === 'string') cleaned = parsed;
         } catch (e) {
-          serviceAccountJson = serviceAccountJson.slice(1, -1);
+          cleaned = cleaned.slice(1, -1);
         }
       }
 
-      const credentials = typeof serviceAccountJson === 'string' ? JSON.parse(serviceAccountJson) : serviceAccountJson;
+      const credentials = typeof cleaned === 'object' ? cleaned : JSON.parse(cleaned);
       const auth = new google.auth.GoogleAuth({
         credentials,
         scopes: SCOPES,
@@ -219,6 +244,10 @@ const getAuthClient = async (req?: any) => {
       return client;
     } catch (e: any) {
       console.error('Service Account authentication failed:', e.message);
+      // Log character codes of the first few characters to identify hidden symbols
+      const firstFew = serviceAccountJson.substring(0, 10);
+      const charCodes = firstFew.split('').map(c => c.charCodeAt(0)).join(', ');
+      console.error(`First 10 chars analysis: "${firstFew}" (Codes: ${charCodes})`);
     }
   }
 
