@@ -52,6 +52,7 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [isServiceAccount, setIsServiceAccount] = useState<boolean>(false);
   const [serviceAccountEmail, setServiceAccountEmail] = useState<string | null>(null);
+  const [authInfo, setAuthInfo] = useState<any>(null);
   const [file, setFile] = useState<File | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
@@ -119,13 +120,19 @@ export default function App() {
       const contentType = res.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
         const data = await res.json();
+        setAuthInfo(data);
         setIsAuthenticated(data.isAuthenticated);
         setIsServiceAccount(!!data.isServiceAccount);
         setServiceAccountEmail(data.serviceAccountEmail);
         if (data.isAuthenticated) fetchNextWp();
       } else {
         const text = await res.text();
-        console.error('Non-JSON response from /api/auth/status:', text);
+        console.error('Non-JSON response from /api/auth/status:', {
+          status: res.status,
+          statusText: res.statusText,
+          contentType,
+          body: text.substring(0, 500)
+        });
         setIsAuthenticated(false);
       }
     } catch (err) {
@@ -452,7 +459,19 @@ export default function App() {
       const contentType = res.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
         const text = await res.text();
-        throw new Error(`Server returned non-JSON response: ${text.substring(0, 50)}...`);
+        console.error('Non-JSON response from /api/process:', {
+          status: res.status,
+          statusText: res.statusText,
+          contentType,
+          body: text.substring(0, 1000)
+        });
+        
+        let errorMessage = `Server ส่งข้อมูลกลับมาไม่ถูกต้อง (ไม่ใช่ JSON)`;
+        if (text.includes('<!doctype html>') || text.includes('<html>')) {
+          errorMessage = `Server ส่งหน้าเว็บกลับมาแทนที่จะเป็นข้อมูล (อาจเกิดจาก Session หมดอายุ หรือ API Route มีปัญหา)`;
+        }
+        
+        throw new Error(`${errorMessage}. Status: ${res.status} ${res.statusText}`);
       }
 
       const data = await res.json();
@@ -555,9 +574,17 @@ export default function App() {
           <div className="flex items-center gap-4">
             {isAuthenticated ? (
               <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full uppercase tracking-wider">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  เชื่อมต่อแล้ว
+                <span className={`flex items-center gap-1.5 text-xs font-bold px-2 py-1 rounded-full uppercase tracking-wider ${
+                  (authInfo?.hasCredentials === false && authInfo?.authMethod === 'refresh_token') || authInfo?.serviceAccountError
+                    ? 'text-amber-600 bg-amber-50'
+                    : 'text-emerald-600 bg-emerald-50'
+                }`}>
+                  <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+                    (authInfo?.hasCredentials === false && authInfo?.authMethod === 'refresh_token') || authInfo?.serviceAccountError
+                      ? 'bg-amber-500'
+                      : 'bg-emerald-500'
+                  }`} />
+                  {authInfo?.serviceAccountError ? 'Auth Error' : 'เชื่อมต่อแล้ว'}
                 </span>
                 {!isServiceAccount && (
                   <button 
@@ -584,6 +611,35 @@ export default function App() {
 
       <main className="max-w-3xl mx-auto px-6 py-12">
         <div className="space-y-8">
+          {/* Auth Warnings */}
+          {authInfo && (
+            <div className="space-y-4">
+              {authInfo.authMethod === 'refresh_token' && !authInfo.hasCredentials && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex gap-3 items-start">
+                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-bold text-amber-900">พบปัญหาการตั้งค่า Google OAuth</p>
+                    <p className="text-xs text-amber-700 mt-1">
+                      คุณได้ตั้งค่า GOOGLE_REFRESH_TOKEN ไว้ แต่ยังไม่ได้ตั้งค่า GOOGLE_CLIENT_ID หรือ GOOGLE_CLIENT_SECRET ใน Settings 
+                      กรุณาตรวจสอบและตั้งค่าให้ครบถ้วนเพื่อให้ระบบทำงานได้อัตโนมัติ
+                    </p>
+                  </div>
+                </div>
+              )}
+              {authInfo.serviceAccountError && (
+                <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex gap-3 items-start">
+                  <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-bold text-red-900">Service Account Error</p>
+                    <p className="text-xs text-red-700 mt-1">
+                      {authInfo.serviceAccountError}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Next WP Indicator */}
           {isAuthenticated && nextWp && (
             <div className="bg-white border border-stone-200 rounded-2xl p-4 flex items-center justify-between shadow-sm">

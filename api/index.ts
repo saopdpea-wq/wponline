@@ -58,22 +58,44 @@ const getRedirectUri = (req?: any) => {
   return redirectUri;
 };
 
-const getOAuth2Client = (req?: any) => {
-  const clientId = (
+const getGoogleCredentials = () => {
+  const cleanValue = (val: string | undefined) => {
+    if (!val) return '';
+    let cleaned = val.trim();
+    // Handle case where user might have pasted "KEY: value"
+    if (cleaned.includes(':') && !cleaned.startsWith('{')) {
+      const parts = cleaned.split(':');
+      const firstPart = parts[0].toUpperCase();
+      if (firstPart.includes('GOOGLE') || firstPart.includes('CLIENT') || firstPart.includes('SECRET') || firstPart.includes('TOKEN')) {
+        cleaned = parts.slice(1).join(':').trim();
+      }
+    }
+    // Remove quotes if present
+    if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+      cleaned = cleaned.substring(1, cleaned.length - 1).trim();
+    }
+    return cleaned;
+  };
+
+  const clientId = cleanValue(
     process.env.GOOGLE_CLIENT_ID || 
     process.env.CLIENT_ID || 
     process.env.Google_Client_Id || 
-    process.env.google_client_id || 
-    ''
-  ).trim();
+    process.env.google_client_id
+  );
   
-  const clientSecret = (
+  const clientSecret = cleanValue(
     process.env.GOOGLE_CLIENT_SECRET || 
     process.env.CLIENT_SECRET || 
     process.env.Google_Client_Secret || 
-    process.env.google_client_secret || 
-    ''
-  ).trim();
+    process.env.google_client_secret
+  );
+  
+  return { clientId, clientSecret };
+};
+
+const getOAuth2Client = (req?: any) => {
+  const { clientId, clientSecret } = getGoogleCredentials();
   
   if (!clientId || !clientSecret) {
     console.error('Missing Google Credentials:', { 
@@ -92,8 +114,6 @@ const getOAuth2Client = (req?: any) => {
     redirectUri
   });
 };
-
-// const oauth2Client = getOAuth2Client(); // Removed to avoid startup errors
 
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
@@ -146,8 +166,7 @@ async function getNextWpNumber(sheets: any, spreadsheetId: string, sheetName: st
 }
 
 const getAuthClient = async (req?: any) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET;
+  const { clientId, clientSecret } = getGoogleCredentials();
 
   // 1. Try User OAuth tokens from cookies first (User override)
   const tokens = req?.cookies?.google_tokens;
@@ -162,9 +181,9 @@ const getAuthClient = async (req?: any) => {
         if (parsedTokens.expiry_date && parsedTokens.expiry_date <= Date.now()) {
           console.log('User token expired, attempting refresh...');
           const refreshResponse = await auth.refreshAccessToken();
-          if (refreshResponse && refreshResponse.tokens) {
+          if (refreshResponse && (refreshResponse as any).tokens) {
             // Merge new tokens with old ones to keep the refresh_token
-            const newTokens = { ...parsedTokens, ...refreshResponse.tokens };
+            const newTokens = { ...parsedTokens, ...(refreshResponse as any).tokens };
             auth.setCredentials(newTokens);
             console.log('User token refreshed successfully');
           } else {
@@ -180,27 +199,64 @@ const getAuthClient = async (req?: any) => {
   }
 
   // 2. Try Refresh Token from Environment Variables (Always Connected - OAuth method)
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  let refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
   if (refreshToken && clientId && clientSecret) {
     try {
-      const auth = getOAuth2Client(req);
-      if (auth) {
-        auth.setCredentials({ refresh_token: refreshToken });
-        // Force a refresh to get a valid access token immediately
-        console.log('Using GOOGLE_REFRESH_TOKEN from Env, refreshing access token...');
+      refreshToken = refreshToken.trim();
+      // Handle case where user might have pasted "GOOGLE_REFRESH_TOKEN: value"
+      if (refreshToken.includes(':') && !refreshToken.startsWith('{')) {
+        const parts = refreshToken.split(':');
+        const firstPart = parts[0].toUpperCase();
+        if (firstPart.includes('GOOGLE') || firstPart.includes('TOKEN') || firstPart.includes('REFRESH')) {
+          refreshToken = parts.slice(1).join(':').trim();
+        }
+      }
+      
+      // Handle case where user might have pasted the whole JSON instead of just the string
+      if (refreshToken.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(refreshToken);
+          refreshToken = parsed.refresh_token || parsed.refreshToken || refreshToken;
+        } catch (e) {}
+      }
+      
+      // Final trim and quote removal
+      refreshToken = refreshToken.trim();
+      if ((refreshToken.startsWith('"') && refreshToken.endsWith('"')) || (refreshToken.startsWith("'") && refreshToken.endsWith("'"))) {
+        refreshToken = refreshToken.substring(1, refreshToken.length - 1).trim();
+      }
+
+      // Create client WITHOUT redirectUri for refresh token grant to be more permissive
+      const auth = new OAuth2Client({ clientId, clientSecret });
+      
+      auth.setCredentials({ refresh_token: refreshToken });
+      // Force a refresh to get a valid access token immediately
+      console.log('Using GOOGLE_REFRESH_TOKEN from Env, refreshing access token...');
+      try {
         const refreshResponse = await auth.refreshAccessToken();
-        if (refreshResponse && refreshResponse.tokens) {
+        if (refreshResponse && (refreshResponse as any).tokens) {
           // Merge to ensure refresh_token is preserved
           auth.setCredentials({ 
             refresh_token: refreshToken, 
-            ...refreshResponse.tokens 
+            ...(refreshResponse as any).tokens 
           });
           console.log('Env refresh token used successfully');
           return auth;
         } else {
-          console.error('Failed to get tokens from refreshAccessToken using Env Refresh Token. This usually means the GOOGLE_REFRESH_TOKEN is invalid, expired, or the Client ID/Secret do not match.');
+          console.error('refreshAccessToken returned success but no tokens were found in response');
+        }
+      } catch (refreshErr: any) {
+        console.error('refreshAccessToken failed with error:', refreshErr.message);
+        if (refreshErr.response && refreshErr.response.data) {
+          console.error('Google API Error Response:', JSON.stringify(refreshErr.response.data));
+        }
+        if (refreshErr.message.includes('invalid_grant')) {
+          console.error('CRITICAL: GOOGLE_REFRESH_TOKEN is invalid or expired. You MUST get a new one by logging in again.');
         }
       }
+      
+      console.error('Failed to get tokens from refreshAccessToken using Env Refresh Token.');
+      console.error(`Debug Info: Client ID starts with ${clientId.substring(0, 10)}, Secret starts with ${clientSecret.substring(0, 10)}, Refresh Token starts with ${refreshToken.substring(0, 10)}`);
     } catch (e: any) {
       console.error('Error using GOOGLE_REFRESH_TOKEN:', e.message);
     }
@@ -208,46 +264,36 @@ const getAuthClient = async (req?: any) => {
 
   // 3. Fallback to Service Account (Always Connected - Service Account method)
   let serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (serviceAccountJson) {
+  if (serviceAccountJson && serviceAccountJson.trim().length > 10) {
     try {
-      console.log('Attempting to use Service Account authentication...');
       let cleaned = serviceAccountJson.trim();
       
-      // Ultra-robust cleaning: Remove any leading/trailing non-JSON characters
-      // This handles cases where people might paste "- { ... }" or other noise
-      const firstBrace = cleaned.indexOf('{');
-      const lastBrace = cleaned.lastIndexOf('}');
+      // Find the JSON object part - MUST contain { and }
+      const start = cleaned.indexOf('{');
+      const end = cleaned.lastIndexOf('}');
       
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
-      }
-
-      // Handle potential wrapping in quotes
-      if (cleaned.startsWith("'") && cleaned.endsWith("'")) cleaned = cleaned.slice(1, -1);
-      if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+      if (start === -1 || end === -1 || end <= start) {
+        console.warn('GOOGLE_SERVICE_ACCOUNT_JSON does not contain a valid JSON object (missing { or })');
+      } else {
+        cleaned = cleaned.substring(start, end + 1);
+        
         try {
-          const parsed = JSON.parse(cleaned);
-          if (typeof parsed === 'object') cleaned = JSON.stringify(parsed);
-          else if (typeof parsed === 'string') cleaned = parsed;
-        } catch (e) {
-          cleaned = cleaned.slice(1, -1);
+          const credentials = JSON.parse(cleaned);
+          const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: SCOPES,
+          });
+          const client = await auth.getClient();
+          console.log('Using Service Account authentication (Success)');
+          return client;
+        } catch (parseErr: any) {
+          console.error('Failed to parse Service Account JSON:', parseErr.message);
+          // Log only the first 5 chars to help debugging without leaking
+          console.error('JSON starts with:', cleaned.substring(0, 5));
         }
       }
-
-      const credentials = typeof cleaned === 'object' ? cleaned : JSON.parse(cleaned);
-      const auth = new google.auth.GoogleAuth({
-        credentials,
-        scopes: SCOPES,
-      });
-      const client = await auth.getClient();
-      console.log('Using Service Account authentication');
-      return client;
     } catch (e: any) {
-      console.error('Service Account authentication failed:', e.message);
-      // Log character codes of the first few characters to identify hidden symbols
-      const firstFew = serviceAccountJson.substring(0, 10);
-      const charCodes = firstFew.split('').map(c => c.charCodeAt(0)).join(', ');
-      console.error(`First 10 chars analysis: "${firstFew}" (Codes: ${charCodes})`);
+      console.error('Service Account authentication process failed:', e.message);
     }
   }
 
@@ -482,41 +528,41 @@ app.get('/api/auth/status', (req, res) => {
   const tokens = req.cookies?.google_tokens;
   const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   const hasRefreshToken = !!process.env.GOOGLE_REFRESH_TOKEN;
+  const { clientId, clientSecret } = getGoogleCredentials();
+  const hasCredentials = !!clientId && !!clientSecret;
+  
   let isServiceAccountValid = false;
+  let serviceAccountEmail = null;
+  let serviceAccountError = null;
   
   if (serviceAccountJson) {
     try {
       let cleaned = serviceAccountJson.trim();
-      if (cleaned.startsWith("'") && cleaned.endsWith("'")) cleaned = cleaned.slice(1, -1);
-      if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
-        try { cleaned = JSON.parse(cleaned); } catch(e) { cleaned = cleaned.slice(1, -1); }
+      const start = cleaned.indexOf('{');
+      const end = cleaned.lastIndexOf('}');
+      if (start !== -1 && end !== -1 && end > start) {
+        cleaned = cleaned.substring(start, end + 1);
+        const creds = JSON.parse(cleaned);
+        isServiceAccountValid = !!creds.client_email && !!creds.private_key;
+        serviceAccountEmail = creds.client_email;
+      } else {
+        serviceAccountError = 'Invalid JSON format (missing { or })';
       }
-      JSON.parse(typeof cleaned === 'string' ? cleaned : JSON.stringify(cleaned));
-      isServiceAccountValid = true;
-    } catch (e) {
+    } catch (e: any) {
       isServiceAccountValid = false;
+      serviceAccountError = e.message;
     }
   }
   
-  if (tokens) {
-    res.json({ isAuthenticated: true, isServiceAccount: false });
-  } else if (hasRefreshToken || isServiceAccountValid) {
-    let serviceAccountEmail = null;
-    if (isServiceAccountValid && serviceAccountJson) {
-      try {
-        let cleaned = serviceAccountJson.trim();
-        if (cleaned.startsWith("'") && cleaned.endsWith("'")) cleaned = cleaned.slice(1, -1);
-        if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
-          try { cleaned = JSON.parse(cleaned); } catch(e) { cleaned = cleaned.slice(1, -1); }
-        }
-        const creds = typeof cleaned === 'string' ? JSON.parse(cleaned) : cleaned;
-        serviceAccountEmail = creds.client_email;
-      } catch (e) {}
-    }
-    res.json({ isAuthenticated: true, isServiceAccount: true, serviceAccountEmail });
-  } else {
-    res.json({ isAuthenticated: false, isServiceAccount: false });
-  }
+  res.json({ 
+    isAuthenticated: !!tokens || (hasRefreshToken && hasCredentials) || isServiceAccountValid,
+    isServiceAccount: isServiceAccountValid,
+    serviceAccountEmail,
+    serviceAccountError,
+    hasRefreshToken,
+    hasCredentials,
+    authMethod: tokens ? 'cookie' : (hasRefreshToken && hasCredentials ? 'refresh_token' : (isServiceAccountValid ? 'service_account' : 'none'))
+  });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -527,7 +573,15 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/token', async (req, res) => {
   try {
     const auth = await getAuthClient(req);
-    if (!auth) return res.status(401).json({ error: 'Not authenticated' });
+    if (!auth) {
+      const { clientId, clientSecret } = getGoogleCredentials();
+      const hasRefreshToken = !!process.env.GOOGLE_REFRESH_TOKEN;
+      let reason = 'กรุณาเชื่อมต่อ Google ก่อนใช้งาน';
+      if (hasRefreshToken && (!clientId || !clientSecret)) {
+        reason = 'การตั้งค่า Google API ไม่ครบถ้วน (ขาด Client ID หรือ Secret ใน Settings)';
+      }
+      return res.status(401).json({ error: reason, needsAuth: true });
+    }
     
     const tokens = await (auth as any).getAccessToken();
     res.json({ token: tokens.token });
@@ -540,7 +594,15 @@ app.get('/api/auth/token', async (req, res) => {
 app.get('/api/next-wp', async (req, res) => {
   try {
     const auth = await getAuthClient(req);
-    if (!auth) return res.status(401).json({ error: 'Not authenticated' });
+    if (!auth) {
+      const { clientId, clientSecret } = getGoogleCredentials();
+      const hasRefreshToken = !!process.env.GOOGLE_REFRESH_TOKEN;
+      let reason = 'กรุณาเชื่อมต่อ Google ก่อนใช้งาน';
+      if (hasRefreshToken && (!clientId || !clientSecret)) {
+        reason = 'การตั้งค่า Google API ไม่ครบถ้วน (ขาด Client ID หรือ Secret ใน Settings)';
+      }
+      return res.status(401).json({ error: reason, needsAuth: true });
+    }
 
     const sheets = google.sheets({ version: 'v4', auth: auth as any });
     const spreadsheetId = process.env.GOOGLE_SHEET_ID;
@@ -560,7 +622,15 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
   const file = req.file;
   try {
     const auth = await getAuthClient(req);
-    if (!auth) return res.status(401).json({ error: 'Not authenticated' });
+    if (!auth) {
+      const { clientId, clientSecret } = getGoogleCredentials();
+      const hasRefreshToken = !!process.env.GOOGLE_REFRESH_TOKEN;
+      let reason = 'กรุณาเชื่อมต่อ Google ก่อนใช้งาน';
+      if (hasRefreshToken && (!clientId || !clientSecret)) {
+        reason = 'การตั้งค่า Google API ไม่ครบถ้วน (ขาด Client ID หรือ Secret ใน Settings)';
+      }
+      return res.status(401).json({ error: reason, needsAuth: true });
+    }
 
     const driveFileId = req.body.driveFileId;
     
@@ -1223,28 +1293,43 @@ app.get('/api/diag', (req, res) => {
 });
 
 // Global Error Handler
-app.use('/api/*', (req, res, next) => {
-  res.status(404).json({ error: `API route not found: ${req.originalUrl}` });
-});
-
 app.use((err: any, req: any, res: any, next: any) => {
-  console.error('Global Error Handler:', err);
+  console.error('Global Error Handler caught error:', err);
   const status = err.status || 500;
   const message = err.message || 'Internal Server Error';
   
-  if (req.path.startsWith('/api')) {
-    res.status(status).json({ error: message, code: err.code });
+  // More robust check for API routes
+  const isApiRequest = req.path.startsWith('/api') || req.originalUrl.startsWith('/api');
+  
+  if (isApiRequest) {
+    // Ensure we always return JSON for API requests
+    if (!res.headersSent) {
+      res.status(status).json({ 
+        error: message, 
+        code: err.code,
+        path: req.originalUrl
+      });
+    }
   } else {
-    res.status(status).send(`
-      <html>
-        <body>
-          <h2>Server Error</h2>
-          <p style="color: red;">${message}</p>
-          <a href="/">กลับหน้าหลัก</a>
-        </body>
-      </html>
-    `);
+    if (!res.headersSent) {
+      res.status(status).send(`
+        <html>
+          <head><title>Server Error</title></head>
+          <body style="font-family: sans-serif; padding: 2rem;">
+            <h2 style="color: #e11d48;">Server Error</h2>
+            <p style="color: #4b5563;">${message}</p>
+            <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 1.5rem 0;" />
+            <a href="/" style="color: #4f46e5; text-decoration: none; font-weight: 600;">กลับหน้าหลัก</a>
+          </body>
+        </html>
+      `);
+    }
   }
+});
+
+// Final 404 handler for API
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.originalUrl}` });
 });
 
 async function startServer() {
