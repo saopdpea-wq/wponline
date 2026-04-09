@@ -617,6 +617,28 @@ app.get('/api/next-wp', async (req, res) => {
   }
 });
 
+// Helper for Gemini API with Retry
+async function generateContentWithRetry(model: any, prompt: any, maxRetries = 3) {
+  let lastError: any = null;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await model.generateContent(prompt);
+    } catch (error: any) {
+      lastError = error;
+      const isQuotaError = error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED');
+      
+      if (isQuotaError && i < maxRetries - 1) {
+        const delay = Math.pow(2, i) * 2000 + Math.random() * 1000;
+        console.warn(`Gemini API Quota exceeded (429). Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 // Drive & Calendar Processing
 app.post('/api/process', upload.single('file'), async (req: any, res) => {
   const file = req.file;
@@ -1181,8 +1203,9 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
         const { GoogleGenAI } = await import('@google/genai');
         const ai = new GoogleGenAI({ apiKey: geminiKey });
         
-        const result = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
+        const model = (ai as any).getGenerativeModel({ model: "gemini-3-flash-preview" });
+        
+        const result = await generateContentWithRetry(model, {
           contents: [{
             parts: [
               { text: "Extract all text from this PDF document accurately. If it's a scanned document, use OCR to get the text." },
@@ -1191,7 +1214,8 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
           }]
         });
         
-        extractedText = result.text || '';
+        const response = await result.response;
+        extractedText = response.text() || '';
         if (extractedText) {
           console.log('PDF extracted successfully using Gemini AI, length:', extractedText.length);
           // If successful, we can skip the local parser

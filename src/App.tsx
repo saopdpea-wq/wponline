@@ -55,6 +55,7 @@ export default function App() {
   const [authInfo, setAuthInfo] = useState<any>(null);
   const [file, setFile] = useState<File | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
   const [nextWp, setNextWp] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -216,8 +217,13 @@ export default function App() {
     setIsExtracting(true);
     setError(null);
     setExtractedData(null);
+    setRetryCountdown(null);
 
-    try {
+    const maxRetries = 3;
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
       let contents: any[] = [];
       
       if (file.type === 'application/pdf') {
@@ -309,41 +315,42 @@ export default function App() {
         ];
       }
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: contents,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              events: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    wpNumber: { type: Type.STRING },
-                    stationName: { type: Type.STRING },
-                    date: { type: Type.STRING },
-                    isoDate: { type: Type.STRING },
-                    isStaffed: { type: Type.BOOLEAN },
-                    calendarTitle: { type: Type.STRING },
-                    requestingUnit: { type: Type.STRING },
-                    workDescription: { type: Type.STRING },
-                    startTime: { type: Type.STRING },
-                    endTime: { type: Type.STRING },
-                    department: { type: Type.STRING }
-                  },
-                  required: ["wpNumber", "stationName", "date", "isoDate", "isStaffed", "calendarTitle", "requestingUnit", "workDescription", "startTime", "endTime", "department"]
+        const model = (ai as any).getGenerativeModel({ model: "gemini-3-flash-preview" });
+        const result = await model.generateContent({
+          contents: contents,
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                events: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      wpNumber: { type: Type.STRING },
+                      stationName: { type: Type.STRING },
+                      date: { type: Type.STRING },
+                      isoDate: { type: Type.STRING },
+                      isStaffed: { type: Type.BOOLEAN },
+                      calendarTitle: { type: Type.STRING },
+                      requestingUnit: { type: Type.STRING },
+                      workDescription: { type: Type.STRING },
+                      startTime: { type: Type.STRING },
+                      endTime: { type: Type.STRING },
+                      department: { type: Type.STRING }
+                    },
+                    required: ["wpNumber", "stationName", "date", "isoDate", "isStaffed", "calendarTitle", "requestingUnit", "workDescription", "startTime", "endTime", "department"]
+                  }
                 }
-              }
-            },
-            required: ["events"]
+              },
+              required: ["events"]
+            }
           }
-        }
-      });
+        });
 
-      const data = JSON.parse(response.text || '{}');
+        const response = await result.response;
+        const data = JSON.parse(response.text() || '{}');
       
       // Post-process to ensure same WP number if multiple events
       if (data.events && data.events.length > 1) {
@@ -354,19 +361,49 @@ export default function App() {
         }));
       }
       
-      setExtractedData(data);
-    } catch (err: any) {
-      console.error('Extraction failed', err);
-      if (err.message?.includes('API_KEY_INVALID') || err.message?.includes('API key not found')) {
-        setError('API Key สำหรับ Gemini ไม่ถูกต้องหรือไม่ได้ตั้งค่า กรุณาตรวจสอบการตั้งค่า');
-      } else if (err.message?.includes('SAFETY')) {
-        setError('ไม่สามารถสกัดข้อมูลได้เนื่องจากติดตัวกรองความปลอดภัยของ AI กรุณาลองใช้ไฟล์อื่น');
-      } else {
-        setError(err.message || 'ไม่สามารถสกัดข้อมูลจากไฟล์ได้ กรุณาลองใหม่อีกครั้งหรือตรวจสอบรูปแบบไฟล์');
+        setExtractedData(data);
+        setIsExtracting(false);
+        return; // Success!
+
+      } catch (err: any) {
+        lastError = err;
+        console.error(`Extraction attempt ${attempt + 1} failed`, err);
+        
+        const isQuotaError = err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED');
+        
+        if (isQuotaError && attempt < maxRetries - 1) {
+          // Try to parse retry delay from error message if available
+          let delaySeconds = 20; // Default fallback
+          const match = err.message?.match(/retry in ([\d.]+)s/i);
+          if (match) {
+            delaySeconds = Math.ceil(parseFloat(match[1]));
+          } else {
+            delaySeconds = Math.pow(2, attempt) * 10;
+          }
+
+          // Start countdown
+          for (let s = delaySeconds; s > 0; s--) {
+            setRetryCountdown(s);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          setRetryCountdown(null);
+          continue; // Retry
+        }
+        
+        // Final failure or non-quota error
+        if (err.message?.includes('API_KEY_INVALID') || err.message?.includes('API key not found')) {
+          setError('API Key สำหรับ Gemini ไม่ถูกต้องหรือไม่ได้ตั้งค่า กรุณาตรวจสอบการตั้งค่า');
+        } else if (err.message?.includes('SAFETY')) {
+          setError('ไม่สามารถสกัดข้อมูลได้เนื่องจากติดตัวกรองความปลอดภัยของ AI กรุณาลองใช้ไฟล์อื่น');
+        } else if (isQuotaError) {
+          setError('โควตา Gemini API เต็มแล้ว (Free Tier จำกัด 20 ครั้งต่อวัน) กรุณารอสักครู่หรือลองใหม่ภายหลัง');
+        } else {
+          setError(err.message || 'ไม่สามารถสกัดข้อมูลจากไฟล์ได้ กรุณาลองใหม่อีกครั้งหรือตรวจสอบรูปแบบไฟล์');
+        }
+        break;
       }
-    } finally {
-      setIsExtracting(false);
     }
+    setIsExtracting(false);
   };
 
   const handleProcess = async () => {
@@ -673,7 +710,14 @@ export default function App() {
               />
               <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-stone-100 flex items-center justify-center mx-auto mb-4">
                 {isExtracting ? (
-                  <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+                    {retryCountdown !== null && (
+                      <p className="text-xs font-bold text-amber-600 animate-pulse">
+                        โควตาเต็ม กำลังลองใหม่ใน {retryCountdown} วินาที...
+                      </p>
+                    )}
+                  </div>
                 ) : (
                   <Upload className="w-8 h-8 text-stone-400" />
                 )}
