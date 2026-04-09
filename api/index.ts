@@ -203,62 +203,64 @@ const getAuthClient = async (req?: any) => {
   if (refreshToken && clientId && clientSecret) {
     try {
       refreshToken = refreshToken.trim();
-      // Handle case where user might have pasted "GOOGLE_REFRESH_TOKEN: value"
-      if (refreshToken.includes(':') && !refreshToken.startsWith('{')) {
-        const parts = refreshToken.split(':');
-        const firstPart = parts[0].toUpperCase();
-        if (firstPart.includes('GOOGLE') || firstPart.includes('TOKEN') || firstPart.includes('REFRESH')) {
-          refreshToken = parts.slice(1).join(':').trim();
+      
+      // Skip if it looks like a placeholder
+      if (refreshToken.toLowerCase().includes('your_') || refreshToken.length < 10) {
+        console.log('Skipping GOOGLE_REFRESH_TOKEN as it looks like a placeholder');
+      } else {
+        // Handle case where user might have pasted "GOOGLE_REFRESH_TOKEN: value"
+        if (refreshToken.includes(':') && !refreshToken.startsWith('{')) {
+          const parts = refreshToken.split(':');
+          const firstPart = parts[0].toUpperCase();
+          if (firstPart.includes('GOOGLE') || firstPart.includes('TOKEN') || firstPart.includes('REFRESH')) {
+            refreshToken = parts.slice(1).join(':').trim();
+          }
         }
-      }
-      
-      // Handle case where user might have pasted the whole JSON instead of just the string
-      if (refreshToken.startsWith('{')) {
-        try {
-          const parsed = JSON.parse(refreshToken);
-          refreshToken = parsed.refresh_token || parsed.refreshToken || refreshToken;
-        } catch (e) {}
-      }
-      
-      // Final trim and quote removal
-      refreshToken = refreshToken.trim();
-      if ((refreshToken.startsWith('"') && refreshToken.endsWith('"')) || (refreshToken.startsWith("'") && refreshToken.endsWith("'"))) {
-        refreshToken = refreshToken.substring(1, refreshToken.length - 1).trim();
-      }
+        
+        // Handle case where user might have pasted the whole JSON instead of just the string
+        if (refreshToken.startsWith('{')) {
+          try {
+            const parsed = JSON.parse(refreshToken);
+            refreshToken = parsed.refresh_token || parsed.refreshToken || refreshToken;
+          } catch (e) {}
+        }
+        
+        // Final trim and quote removal
+        refreshToken = refreshToken.trim();
+        if ((refreshToken.startsWith('"') && refreshToken.endsWith('"')) || (refreshToken.startsWith("'") && refreshToken.endsWith("'"))) {
+          refreshToken = refreshToken.substring(1, refreshToken.length - 1).trim();
+        }
 
-      // Create client WITHOUT redirectUri for refresh token grant to be more permissive
-      const auth = new OAuth2Client({ clientId, clientSecret });
-      
-      auth.setCredentials({ refresh_token: refreshToken });
-      // Force a refresh to get a valid access token immediately
-      console.log('Using GOOGLE_REFRESH_TOKEN from Env, refreshing access token...');
-      try {
-        const refreshResponse = await auth.refreshAccessToken();
-        if (refreshResponse && (refreshResponse as any).tokens) {
-          // Merge to ensure refresh_token is preserved
-          auth.setCredentials({ 
-            refresh_token: refreshToken, 
-            ...(refreshResponse as any).tokens 
-          });
-          console.log('Env refresh token used successfully');
-          return auth;
-        } else {
-          console.error('refreshAccessToken returned success but no tokens were found in response');
-        }
-      } catch (refreshErr: any) {
-        console.error('refreshAccessToken failed with error:', refreshErr.message);
-        if (refreshErr.response && refreshErr.response.data) {
-          console.error('Google API Error Response:', JSON.stringify(refreshErr.response.data));
-        }
-        if (refreshErr.message.includes('invalid_grant')) {
-          console.error('CRITICAL: GOOGLE_REFRESH_TOKEN is invalid or expired. You MUST get a new one by logging in again.');
+        if (refreshToken.length > 10) {
+          // Create client WITHOUT redirectUri for refresh token grant to be more permissive
+          const auth = new OAuth2Client({ clientId, clientSecret });
+          
+          auth.setCredentials({ refresh_token: refreshToken });
+          // Force a refresh to get a valid access token immediately
+          console.log('Using GOOGLE_REFRESH_TOKEN from Env, refreshing access token...');
+          try {
+            const refreshResponse = await auth.refreshAccessToken();
+            if (refreshResponse && (refreshResponse as any).tokens) {
+              // Merge to ensure refresh_token is preserved
+              auth.setCredentials({ 
+                refresh_token: refreshToken, 
+                ...(refreshResponse as any).tokens 
+              });
+              console.log('Env refresh token used successfully');
+              return auth;
+            }
+          } catch (refreshErr: any) {
+            const errorMsg = refreshErr.message || '';
+            if (errorMsg.includes('invalid_grant')) {
+              console.warn('GOOGLE_REFRESH_TOKEN is invalid or expired. Falling back to other methods...');
+            } else {
+              console.warn('Failed to refresh access token using Env Refresh Token:', errorMsg);
+            }
+          }
         }
       }
-      
-      console.error('Failed to get tokens from refreshAccessToken using Env Refresh Token.');
-      console.error(`Debug Info: Client ID starts with ${clientId.substring(0, 10)}, Secret starts with ${clientSecret.substring(0, 10)}, Refresh Token starts with ${refreshToken.substring(0, 10)}`);
     } catch (e: any) {
-      console.error('Error using GOOGLE_REFRESH_TOKEN:', e.message);
+      console.warn('Error processing GOOGLE_REFRESH_TOKEN:', e.message);
     }
   }
 
@@ -1140,6 +1142,7 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     if (typeof (global as any).DOMMatrix === 'undefined') {
       try {
         // Try to get DOMMatrix from @napi-rs/canvas which is a dependency of pdf-parse
+        // @ts-ignore - optional dependency
         const canvas = await import('@napi-rs/canvas');
         (global as any).DOMMatrix = (canvas as any).DOMMatrix;
         console.log('DOMMatrix polyfilled from @napi-rs/canvas');
