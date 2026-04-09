@@ -52,10 +52,8 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [isServiceAccount, setIsServiceAccount] = useState<boolean>(false);
   const [serviceAccountEmail, setServiceAccountEmail] = useState<string | null>(null);
-  const [authInfo, setAuthInfo] = useState<any>(null);
   const [file, setFile] = useState<File | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
-  const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
   const [nextWp, setNextWp] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -121,7 +119,6 @@ export default function App() {
       const contentType = res.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
         const data = await res.json();
-        setAuthInfo(data);
         setIsAuthenticated(data.isAuthenticated);
         setIsServiceAccount(!!data.isServiceAccount);
         setServiceAccountEmail(data.serviceAccountEmail);
@@ -217,13 +214,8 @@ export default function App() {
     setIsExtracting(true);
     setError(null);
     setExtractedData(null);
-    setRetryCountdown(null);
 
-    const maxRetries = 3;
-    let lastError: any = null;
-
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
+    try {
       let contents: any[] = [];
       
       if (file.type === 'application/pdf') {
@@ -315,42 +307,41 @@ export default function App() {
         ];
       }
 
-        const model = (ai as any).getGenerativeModel({ model: "gemini-3-flash-preview" });
-        const result = await model.generateContent({
-          contents: contents,
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                events: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      wpNumber: { type: Type.STRING },
-                      stationName: { type: Type.STRING },
-                      date: { type: Type.STRING },
-                      isoDate: { type: Type.STRING },
-                      isStaffed: { type: Type.BOOLEAN },
-                      calendarTitle: { type: Type.STRING },
-                      requestingUnit: { type: Type.STRING },
-                      workDescription: { type: Type.STRING },
-                      startTime: { type: Type.STRING },
-                      endTime: { type: Type.STRING },
-                      department: { type: Type.STRING }
-                    },
-                    required: ["wpNumber", "stationName", "date", "isoDate", "isStaffed", "calendarTitle", "requestingUnit", "workDescription", "startTime", "endTime", "department"]
-                  }
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: contents,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              events: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    wpNumber: { type: Type.STRING },
+                    stationName: { type: Type.STRING },
+                    date: { type: Type.STRING },
+                    isoDate: { type: Type.STRING },
+                    isStaffed: { type: Type.BOOLEAN },
+                    calendarTitle: { type: Type.STRING },
+                    requestingUnit: { type: Type.STRING },
+                    workDescription: { type: Type.STRING },
+                    startTime: { type: Type.STRING },
+                    endTime: { type: Type.STRING },
+                    department: { type: Type.STRING }
+                  },
+                  required: ["wpNumber", "stationName", "date", "isoDate", "isStaffed", "calendarTitle", "requestingUnit", "workDescription", "startTime", "endTime", "department"]
                 }
-              },
-              required: ["events"]
-            }
+              }
+            },
+            required: ["events"]
           }
-        });
+        }
+      });
 
-        const response = await result.response;
-        const data = JSON.parse(response.text() || '{}');
+      const data = JSON.parse(response.text || '{}');
       
       // Post-process to ensure same WP number if multiple events
       if (data.events && data.events.length > 1) {
@@ -361,49 +352,19 @@ export default function App() {
         }));
       }
       
-        setExtractedData(data);
-        setIsExtracting(false);
-        return; // Success!
-
-      } catch (err: any) {
-        lastError = err;
-        console.error(`Extraction attempt ${attempt + 1} failed`, err);
-        
-        const isQuotaError = err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED');
-        
-        if (isQuotaError && attempt < maxRetries - 1) {
-          // Try to parse retry delay from error message if available
-          let delaySeconds = 20; // Default fallback
-          const match = err.message?.match(/retry in ([\d.]+)s/i);
-          if (match) {
-            delaySeconds = Math.ceil(parseFloat(match[1]));
-          } else {
-            delaySeconds = Math.pow(2, attempt) * 10;
-          }
-
-          // Start countdown
-          for (let s = delaySeconds; s > 0; s--) {
-            setRetryCountdown(s);
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-          setRetryCountdown(null);
-          continue; // Retry
-        }
-        
-        // Final failure or non-quota error
-        if (err.message?.includes('API_KEY_INVALID') || err.message?.includes('API key not found')) {
-          setError('API Key สำหรับ Gemini ไม่ถูกต้องหรือไม่ได้ตั้งค่า กรุณาตรวจสอบการตั้งค่า');
-        } else if (err.message?.includes('SAFETY')) {
-          setError('ไม่สามารถสกัดข้อมูลได้เนื่องจากติดตัวกรองความปลอดภัยของ AI กรุณาลองใช้ไฟล์อื่น');
-        } else if (isQuotaError) {
-          setError('โควตา Gemini API เต็มแล้ว (Free Tier จำกัด 20 ครั้งต่อวัน) กรุณารอสักครู่หรือลองใหม่ภายหลัง');
-        } else {
-          setError(err.message || 'ไม่สามารถสกัดข้อมูลจากไฟล์ได้ กรุณาลองใหม่อีกครั้งหรือตรวจสอบรูปแบบไฟล์');
-        }
-        break;
+      setExtractedData(data);
+    } catch (err: any) {
+      console.error('Extraction failed', err);
+      if (err.message?.includes('API_KEY_INVALID') || err.message?.includes('API key not found')) {
+        setError('API Key สำหรับ Gemini ไม่ถูกต้องหรือไม่ได้ตั้งค่า กรุณาตรวจสอบการตั้งค่า');
+      } else if (err.message?.includes('SAFETY')) {
+        setError('ไม่สามารถสกัดข้อมูลได้เนื่องจากติดตัวกรองความปลอดภัยของ AI กรุณาลองใช้ไฟล์อื่น');
+      } else {
+        setError(err.message || 'ไม่สามารถสกัดข้อมูลจากไฟล์ได้ กรุณาลองใหม่อีกครั้งหรือตรวจสอบรูปแบบไฟล์');
       }
+    } finally {
+      setIsExtracting(false);
     }
-    setIsExtracting(false);
   };
 
   const handleProcess = async () => {
@@ -611,17 +572,9 @@ export default function App() {
           <div className="flex items-center gap-4">
             {isAuthenticated ? (
               <div className="flex items-center gap-3">
-                <span className={`flex items-center gap-1.5 text-xs font-bold px-2 py-1 rounded-full uppercase tracking-wider ${
-                  (authInfo?.hasCredentials === false && authInfo?.authMethod === 'refresh_token') || authInfo?.serviceAccountError
-                    ? 'text-amber-600 bg-amber-50'
-                    : 'text-emerald-600 bg-emerald-50'
-                }`}>
-                  <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${
-                    (authInfo?.hasCredentials === false && authInfo?.authMethod === 'refresh_token') || authInfo?.serviceAccountError
-                      ? 'bg-amber-500'
-                      : 'bg-emerald-500'
-                  }`} />
-                  {authInfo?.serviceAccountError ? 'Auth Error' : 'เชื่อมต่อแล้ว'}
+                <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full uppercase tracking-wider">
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  เชื่อมต่อแล้ว
                 </span>
                 {!isServiceAccount && (
                   <button 
@@ -648,35 +601,6 @@ export default function App() {
 
       <main className="max-w-3xl mx-auto px-6 py-12">
         <div className="space-y-8">
-          {/* Auth Warnings */}
-          {authInfo && (
-            <div className="space-y-4">
-              {authInfo.authMethod === 'refresh_token' && !authInfo.hasCredentials && (
-                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex gap-3 items-start">
-                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-bold text-amber-900">พบปัญหาการตั้งค่า Google OAuth</p>
-                    <p className="text-xs text-amber-700 mt-1">
-                      คุณได้ตั้งค่า GOOGLE_REFRESH_TOKEN ไว้ แต่ยังไม่ได้ตั้งค่า GOOGLE_CLIENT_ID หรือ GOOGLE_CLIENT_SECRET ใน Settings 
-                      กรุณาตรวจสอบและตั้งค่าให้ครบถ้วนเพื่อให้ระบบทำงานได้อัตโนมัติ
-                    </p>
-                  </div>
-                </div>
-              )}
-              {authInfo.serviceAccountError && (
-                <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex gap-3 items-start">
-                  <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-bold text-red-900">Service Account Error</p>
-                    <p className="text-xs text-red-700 mt-1">
-                      {authInfo.serviceAccountError}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Next WP Indicator */}
           {isAuthenticated && nextWp && (
             <div className="bg-white border border-stone-200 rounded-2xl p-4 flex items-center justify-between shadow-sm">
@@ -710,14 +634,7 @@ export default function App() {
               />
               <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-stone-100 flex items-center justify-center mx-auto mb-4">
                 {isExtracting ? (
-                  <div className="flex flex-col items-center gap-2">
-                    <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
-                    {retryCountdown !== null && (
-                      <p className="text-xs font-bold text-amber-600 animate-pulse">
-                        โควตาเต็ม กำลังลองใหม่ใน {retryCountdown} วินาที...
-                      </p>
-                    )}
-                  </div>
+                  <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
                 ) : (
                   <Upload className="w-8 h-8 text-stone-400" />
                 )}

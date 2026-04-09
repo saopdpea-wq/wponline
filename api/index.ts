@@ -58,44 +58,22 @@ const getRedirectUri = (req?: any) => {
   return redirectUri;
 };
 
-const getGoogleCredentials = () => {
-  const cleanValue = (val: string | undefined) => {
-    if (!val) return '';
-    let cleaned = val.trim();
-    // Handle case where user might have pasted "KEY: value"
-    if (cleaned.includes(':') && !cleaned.startsWith('{')) {
-      const parts = cleaned.split(':');
-      const firstPart = parts[0].toUpperCase();
-      if (firstPart.includes('GOOGLE') || firstPart.includes('CLIENT') || firstPart.includes('SECRET') || firstPart.includes('TOKEN')) {
-        cleaned = parts.slice(1).join(':').trim();
-      }
-    }
-    // Remove quotes if present
-    if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
-      cleaned = cleaned.substring(1, cleaned.length - 1).trim();
-    }
-    return cleaned;
-  };
-
-  const clientId = cleanValue(
+const getOAuth2Client = (req?: any) => {
+  const clientId = (
     process.env.GOOGLE_CLIENT_ID || 
     process.env.CLIENT_ID || 
     process.env.Google_Client_Id || 
-    process.env.google_client_id
-  );
+    process.env.google_client_id || 
+    ''
+  ).trim();
   
-  const clientSecret = cleanValue(
+  const clientSecret = (
     process.env.GOOGLE_CLIENT_SECRET || 
     process.env.CLIENT_SECRET || 
     process.env.Google_Client_Secret || 
-    process.env.google_client_secret
-  );
-  
-  return { clientId, clientSecret };
-};
-
-const getOAuth2Client = (req?: any) => {
-  const { clientId, clientSecret } = getGoogleCredentials();
+    process.env.google_client_secret || 
+    ''
+  ).trim();
   
   if (!clientId || !clientSecret) {
     console.error('Missing Google Credentials:', { 
@@ -114,6 +92,8 @@ const getOAuth2Client = (req?: any) => {
     redirectUri
   });
 };
+
+// const oauth2Client = getOAuth2Client(); // Removed to avoid startup errors
 
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
@@ -166,7 +146,8 @@ async function getNextWpNumber(sheets: any, spreadsheetId: string, sheetName: st
 }
 
 const getAuthClient = async (req?: any) => {
-  const { clientId, clientSecret } = getGoogleCredentials();
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET;
 
   // 1. Try User OAuth tokens from cookies first (User override)
   const tokens = req?.cookies?.google_tokens;
@@ -203,64 +184,47 @@ const getAuthClient = async (req?: any) => {
   if (refreshToken && clientId && clientSecret) {
     try {
       refreshToken = refreshToken.trim();
-      
-      // Skip if it looks like a placeholder
-      if (refreshToken.toLowerCase().includes('your_') || refreshToken.length < 10) {
-        console.log('Skipping GOOGLE_REFRESH_TOKEN as it looks like a placeholder');
-      } else {
-        // Handle case where user might have pasted "GOOGLE_REFRESH_TOKEN: value"
-        if (refreshToken.includes(':') && !refreshToken.startsWith('{')) {
-          const parts = refreshToken.split(':');
-          const firstPart = parts[0].toUpperCase();
-          if (firstPart.includes('GOOGLE') || firstPart.includes('TOKEN') || firstPart.includes('REFRESH')) {
-            refreshToken = parts.slice(1).join(':').trim();
-          }
-        }
-        
-        // Handle case where user might have pasted the whole JSON instead of just the string
-        if (refreshToken.startsWith('{')) {
-          try {
-            const parsed = JSON.parse(refreshToken);
-            refreshToken = parsed.refresh_token || parsed.refreshToken || refreshToken;
-          } catch (e) {}
-        }
-        
-        // Final trim and quote removal
-        refreshToken = refreshToken.trim();
-        if ((refreshToken.startsWith('"') && refreshToken.endsWith('"')) || (refreshToken.startsWith("'") && refreshToken.endsWith("'"))) {
-          refreshToken = refreshToken.substring(1, refreshToken.length - 1).trim();
-        }
+      // Handle case where user might have pasted the whole JSON instead of just the string
+      if (refreshToken.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(refreshToken);
+          refreshToken = parsed.refresh_token || parsed.refreshToken || refreshToken;
+        } catch (e) {}
+      }
 
-        if (refreshToken.length > 10) {
-          // Create client WITHOUT redirectUri for refresh token grant to be more permissive
-          const auth = new OAuth2Client({ clientId, clientSecret });
-          
-          auth.setCredentials({ refresh_token: refreshToken });
-          // Force a refresh to get a valid access token immediately
-          console.log('Using GOOGLE_REFRESH_TOKEN from Env, refreshing access token...');
-          try {
-            const refreshResponse = await auth.refreshAccessToken();
-            if (refreshResponse && (refreshResponse as any).tokens) {
-              // Merge to ensure refresh_token is preserved
-              auth.setCredentials({ 
-                refresh_token: refreshToken, 
-                ...(refreshResponse as any).tokens 
-              });
-              console.log('Env refresh token used successfully');
-              return auth;
-            }
-          } catch (refreshErr: any) {
-            const errorMsg = refreshErr.message || '';
-            if (errorMsg.includes('invalid_grant')) {
-              console.warn('GOOGLE_REFRESH_TOKEN is invalid or expired. Falling back to other methods...');
-            } else {
-              console.warn('Failed to refresh access token using Env Refresh Token:', errorMsg);
-            }
+      const auth = getOAuth2Client(req);
+      if (auth) {
+        auth.setCredentials({ refresh_token: refreshToken });
+        // Force a refresh to get a valid access token immediately
+        console.log('Using GOOGLE_REFRESH_TOKEN from Env, refreshing access token...');
+        try {
+          const refreshResponse = await auth.refreshAccessToken();
+          if (refreshResponse && (refreshResponse as any).tokens) {
+            // Merge to ensure refresh_token is preserved
+            auth.setCredentials({ 
+              refresh_token: refreshToken, 
+              ...(refreshResponse as any).tokens 
+            });
+            console.log('Env refresh token used successfully');
+            return auth;
+          } else {
+            console.error('refreshAccessToken returned success but no tokens were found in response');
+          }
+        } catch (refreshErr: any) {
+          console.error('refreshAccessToken failed with error:', refreshErr.message);
+          if (refreshErr.response) {
+            console.error('Google API Error Response:', JSON.stringify(refreshErr.response.data));
+          }
+          if (refreshErr.message.includes('invalid_grant')) {
+            console.error('CRITICAL: GOOGLE_REFRESH_TOKEN is invalid or expired. You MUST get a new one by logging in again.');
           }
         }
+        
+        console.error('Failed to get tokens from refreshAccessToken using Env Refresh Token.');
+        console.error(`Debug Info: Client ID starts with ${clientId.substring(0, 10)}, Secret starts with ${clientSecret.substring(0, 10)}, Refresh Token starts with ${refreshToken.substring(0, 10)}`);
       }
     } catch (e: any) {
-      console.warn('Error processing GOOGLE_REFRESH_TOKEN:', e.message);
+      console.error('Error using GOOGLE_REFRESH_TOKEN:', e.message);
     }
   }
 
@@ -530,41 +494,41 @@ app.get('/api/auth/status', (req, res) => {
   const tokens = req.cookies?.google_tokens;
   const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   const hasRefreshToken = !!process.env.GOOGLE_REFRESH_TOKEN;
-  const { clientId, clientSecret } = getGoogleCredentials();
-  const hasCredentials = !!clientId && !!clientSecret;
-  
   let isServiceAccountValid = false;
-  let serviceAccountEmail = null;
-  let serviceAccountError = null;
   
   if (serviceAccountJson) {
     try {
       let cleaned = serviceAccountJson.trim();
-      const start = cleaned.indexOf('{');
-      const end = cleaned.lastIndexOf('}');
-      if (start !== -1 && end !== -1 && end > start) {
-        cleaned = cleaned.substring(start, end + 1);
-        const creds = JSON.parse(cleaned);
-        isServiceAccountValid = !!creds.client_email && !!creds.private_key;
-        serviceAccountEmail = creds.client_email;
-      } else {
-        serviceAccountError = 'Invalid JSON format (missing { or })';
+      if (cleaned.startsWith("'") && cleaned.endsWith("'")) cleaned = cleaned.slice(1, -1);
+      if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+        try { cleaned = JSON.parse(cleaned); } catch(e) { cleaned = cleaned.slice(1, -1); }
       }
-    } catch (e: any) {
+      JSON.parse(typeof cleaned === 'string' ? cleaned : JSON.stringify(cleaned));
+      isServiceAccountValid = true;
+    } catch (e) {
       isServiceAccountValid = false;
-      serviceAccountError = e.message;
     }
   }
   
-  res.json({ 
-    isAuthenticated: !!tokens || (hasRefreshToken && hasCredentials) || isServiceAccountValid,
-    isServiceAccount: isServiceAccountValid,
-    serviceAccountEmail,
-    serviceAccountError,
-    hasRefreshToken,
-    hasCredentials,
-    authMethod: tokens ? 'cookie' : (hasRefreshToken && hasCredentials ? 'refresh_token' : (isServiceAccountValid ? 'service_account' : 'none'))
-  });
+  if (tokens) {
+    res.json({ isAuthenticated: true, isServiceAccount: false });
+  } else if (hasRefreshToken || isServiceAccountValid) {
+    let serviceAccountEmail = null;
+    if (isServiceAccountValid && serviceAccountJson) {
+      try {
+        let cleaned = serviceAccountJson.trim();
+        if (cleaned.startsWith("'") && cleaned.endsWith("'")) cleaned = cleaned.slice(1, -1);
+        if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+          try { cleaned = JSON.parse(cleaned); } catch(e) { cleaned = cleaned.slice(1, -1); }
+        }
+        const creds = typeof cleaned === 'string' ? JSON.parse(cleaned) : cleaned;
+        serviceAccountEmail = creds.client_email;
+      } catch (e) {}
+    }
+    res.json({ isAuthenticated: true, isServiceAccount: true, serviceAccountEmail });
+  } else {
+    res.json({ isAuthenticated: false, isServiceAccount: false });
+  }
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -575,15 +539,7 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/token', async (req, res) => {
   try {
     const auth = await getAuthClient(req);
-    if (!auth) {
-      const { clientId, clientSecret } = getGoogleCredentials();
-      const hasRefreshToken = !!process.env.GOOGLE_REFRESH_TOKEN;
-      let reason = 'กรุณาเชื่อมต่อ Google ก่อนใช้งาน';
-      if (hasRefreshToken && (!clientId || !clientSecret)) {
-        reason = 'การตั้งค่า Google API ไม่ครบถ้วน (ขาด Client ID หรือ Secret ใน Settings)';
-      }
-      return res.status(401).json({ error: reason, needsAuth: true });
-    }
+    if (!auth) return res.status(401).json({ error: 'Not authenticated' });
     
     const tokens = await (auth as any).getAccessToken();
     res.json({ token: tokens.token });
@@ -596,15 +552,7 @@ app.get('/api/auth/token', async (req, res) => {
 app.get('/api/next-wp', async (req, res) => {
   try {
     const auth = await getAuthClient(req);
-    if (!auth) {
-      const { clientId, clientSecret } = getGoogleCredentials();
-      const hasRefreshToken = !!process.env.GOOGLE_REFRESH_TOKEN;
-      let reason = 'กรุณาเชื่อมต่อ Google ก่อนใช้งาน';
-      if (hasRefreshToken && (!clientId || !clientSecret)) {
-        reason = 'การตั้งค่า Google API ไม่ครบถ้วน (ขาด Client ID หรือ Secret ใน Settings)';
-      }
-      return res.status(401).json({ error: reason, needsAuth: true });
-    }
+    if (!auth) return res.status(401).json({ error: 'Not authenticated' });
 
     const sheets = google.sheets({ version: 'v4', auth: auth as any });
     const spreadsheetId = process.env.GOOGLE_SHEET_ID;
@@ -619,42 +567,12 @@ app.get('/api/next-wp', async (req, res) => {
   }
 });
 
-// Helper for Gemini API with Retry
-async function generateContentWithRetry(model: any, prompt: any, maxRetries = 3) {
-  let lastError: any = null;
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      return await model.generateContent(prompt);
-    } catch (error: any) {
-      lastError = error;
-      const isQuotaError = error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED');
-      
-      if (isQuotaError && i < maxRetries - 1) {
-        const delay = Math.pow(2, i) * 2000 + Math.random() * 1000;
-        console.warn(`Gemini API Quota exceeded (429). Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1}/${maxRetries})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw lastError;
-}
-
 // Drive & Calendar Processing
 app.post('/api/process', upload.single('file'), async (req: any, res) => {
   const file = req.file;
   try {
     const auth = await getAuthClient(req);
-    if (!auth) {
-      const { clientId, clientSecret } = getGoogleCredentials();
-      const hasRefreshToken = !!process.env.GOOGLE_REFRESH_TOKEN;
-      let reason = 'กรุณาเชื่อมต่อ Google ก่อนใช้งาน';
-      if (hasRefreshToken && (!clientId || !clientSecret)) {
-        reason = 'การตั้งค่า Google API ไม่ครบถ้วน (ขาด Client ID หรือ Secret ใน Settings)';
-      }
-      return res.status(401).json({ error: reason, needsAuth: true });
-    }
+    if (!auth) return res.status(401).json({ error: 'Not authenticated' });
 
     const driveFileId = req.body.driveFileId;
     
@@ -1142,7 +1060,6 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     if (typeof (global as any).DOMMatrix === 'undefined') {
       try {
         // Try to get DOMMatrix from @napi-rs/canvas which is a dependency of pdf-parse
-        // @ts-ignore - optional dependency
         const canvas = await import('@napi-rs/canvas');
         (global as any).DOMMatrix = (canvas as any).DOMMatrix;
         console.log('DOMMatrix polyfilled from @napi-rs/canvas');
@@ -1206,9 +1123,8 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
         const { GoogleGenAI } = await import('@google/genai');
         const ai = new GoogleGenAI({ apiKey: geminiKey });
         
-        const model = (ai as any).getGenerativeModel({ model: "gemini-3-flash-preview" });
-        
-        const result = await generateContentWithRetry(model, {
+        const result = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
           contents: [{
             parts: [
               { text: "Extract all text from this PDF document accurately. If it's a scanned document, use OCR to get the text." },
@@ -1217,8 +1133,7 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
           }]
         });
         
-        const response = await result.response;
-        extractedText = response.text() || '';
+        extractedText = result.text || '';
         if (extractedText) {
           console.log('PDF extracted successfully using Gemini AI, length:', extractedText.length);
           // If successful, we can skip the local parser
@@ -1231,14 +1146,32 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     // If Gemini failed or wasn't available, try local parser
     if (!extractedText) {
       try {
-        console.log('Attempting to use local pdf-parse parser...');
-        // Import the library directly to avoid the debug mode check in index.js
-        // which tries to load a non-existent test file in ESM environments
-        const pdfParseModule = await import('pdf-parse/lib/pdf-parse.js');
-        const pdfParse: any = pdfParseModule.default || pdfParseModule;
-        const data = await pdfParse(dataBuffer);
-        extractedText = data.text || '';
-        console.log('PDF parsed successfully using local pdf-parse, length:', extractedText.length);
+        console.log('Attempting to use local pdfjs-dist parser...');
+        
+        // Use a more robust way to load pdfjs on Vercel
+        const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        
+        // Load the PDF document
+        const loadingTask = pdfjs.getDocument({
+          data: new Uint8Array(dataBuffer),
+          disableWorker: true,
+          verbosity: 0
+        });
+        
+        const pdfDocument = await loadingTask.promise;
+        let fullText = '';
+        
+        for (let i = 1; i <= pdfDocument.numPages; i++) {
+          const page = await pdfDocument.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items
+            .map((item: any) => (item as any).str || '')
+            .join(' ');
+          fullText += pageText + '\n';
+        }
+        
+        extractedText = fullText.trim();
+        console.log('PDF parsed successfully using local pdfjs-dist, length:', extractedText.length);
       } catch (pdfError: any) {
         console.error('Local parser also failed:', pdfError.message);
         
