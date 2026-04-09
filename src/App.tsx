@@ -125,12 +125,7 @@ export default function App() {
         if (data.isAuthenticated) fetchNextWp();
       } else {
         const text = await res.text();
-        console.error('Non-JSON response from /api/auth/status:', {
-          status: res.status,
-          statusText: res.statusText,
-          contentType,
-          body: text.substring(0, 500)
-        });
+        console.error('Non-JSON response from /api/auth/status:', text);
         setIsAuthenticated(false);
       }
     } catch (err) {
@@ -457,19 +452,7 @@ export default function App() {
       const contentType = res.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
         const text = await res.text();
-        console.error('Non-JSON response from /api/process:', {
-          status: res.status,
-          statusText: res.statusText,
-          contentType,
-          body: text.substring(0, 1000)
-        });
-        
-        let errorMessage = `Server ส่งข้อมูลกลับมาไม่ถูกต้อง (ไม่ใช่ JSON)`;
-        if (text.includes('<!doctype html>') || text.includes('<html>')) {
-          errorMessage = `Server ส่งหน้าเว็บกลับมาแทนที่จะเป็นข้อมูล (อาจเกิดจาก Session หมดอายุ หรือ API Route มีปัญหา)`;
-        }
-        
-        throw new Error(`${errorMessage}. Status: ${res.status} ${res.statusText}`);
+        throw new Error(`Server returned non-JSON response: ${text.substring(0, 50)}...`);
       }
 
       const data = await res.json();

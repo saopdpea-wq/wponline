@@ -146,124 +146,64 @@ async function getNextWpNumber(sheets: any, spreadsheetId: string, sheetName: st
 }
 
 const getAuthClient = async (req?: any) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.CLIENT_SECRET;
-
   // 1. Try User OAuth tokens from cookies first (User override)
   const tokens = req?.cookies?.google_tokens;
-  if (tokens && clientId && clientSecret) {
+  if (tokens) {
     try {
       const auth = getOAuth2Client(req);
       if (auth) {
-        const parsedTokens = JSON.parse(tokens);
-        auth.setCredentials(parsedTokens);
-        
-        // Check if token is expired and refresh if needed
-        if (parsedTokens.expiry_date && parsedTokens.expiry_date <= Date.now()) {
-          console.log('User token expired, attempting refresh...');
-          const refreshResponse = await auth.refreshAccessToken();
-          if (refreshResponse && (refreshResponse as any).tokens) {
-            // Merge new tokens with old ones to keep the refresh_token
-            const newTokens = { ...parsedTokens, ...(refreshResponse as any).tokens };
-            auth.setCredentials(newTokens);
-            console.log('User token refreshed successfully');
-          } else {
-            console.warn('Refresh response did not contain tokens');
-          }
-        }
-        console.log('Using authentication from User Cookies');
+        auth.setCredentials(JSON.parse(tokens));
         return auth;
       }
-    } catch (e: any) {
-      console.error('Error with user tokens:', e.message);
+    } catch (e) {
+      console.error('Error parsing user tokens:', e);
     }
   }
 
   // 2. Try Refresh Token from Environment Variables (Always Connected - OAuth method)
-  let refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-  if (refreshToken && clientId && clientSecret) {
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  if (refreshToken) {
     try {
-      refreshToken = refreshToken.trim();
-      // Handle case where user might have pasted the whole JSON instead of just the string
-      if (refreshToken.startsWith('{')) {
-        try {
-          const parsed = JSON.parse(refreshToken);
-          refreshToken = parsed.refresh_token || parsed.refreshToken || refreshToken;
-        } catch (e) {}
-      }
-
       const auth = getOAuth2Client(req);
       if (auth) {
         auth.setCredentials({ refresh_token: refreshToken });
-        // Force a refresh to get a valid access token immediately
-        console.log('Using GOOGLE_REFRESH_TOKEN from Env, refreshing access token...');
-        try {
-          const refreshResponse = await auth.refreshAccessToken();
-          if (refreshResponse && (refreshResponse as any).tokens) {
-            // Merge to ensure refresh_token is preserved
-            auth.setCredentials({ 
-              refresh_token: refreshToken, 
-              ...(refreshResponse as any).tokens 
-            });
-            console.log('Env refresh token used successfully');
-            return auth;
-          } else {
-            console.error('refreshAccessToken returned success but no tokens were found in response');
-          }
-        } catch (refreshErr: any) {
-          console.error('refreshAccessToken failed with error:', refreshErr.message);
-          if (refreshErr.response) {
-            console.error('Google API Error Response:', JSON.stringify(refreshErr.response.data));
-          }
-          if (refreshErr.message.includes('invalid_grant')) {
-            console.error('CRITICAL: GOOGLE_REFRESH_TOKEN is invalid or expired. You MUST get a new one by logging in again.');
-          }
-        }
-        
-        console.error('Failed to get tokens from refreshAccessToken using Env Refresh Token.');
-        console.error(`Debug Info: Client ID starts with ${clientId.substring(0, 10)}, Secret starts with ${clientSecret.substring(0, 10)}, Refresh Token starts with ${refreshToken.substring(0, 10)}`);
+        return auth;
       }
-    } catch (e: any) {
-      console.error('Error using GOOGLE_REFRESH_TOKEN:', e.message);
+    } catch (e) {
+      console.error('Error using GOOGLE_REFRESH_TOKEN:', e);
     }
   }
 
   // 3. Fallback to Service Account (Always Connected - Service Account method)
   let serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (serviceAccountJson && serviceAccountJson.trim().length > 10) {
+  if (serviceAccountJson) {
     try {
-      let cleaned = serviceAccountJson.trim();
-      
-      // Find the JSON object part - MUST contain { and }
-      const start = cleaned.indexOf('{');
-      const end = cleaned.lastIndexOf('}');
-      
-      if (start === -1 || end === -1 || end <= start) {
-        console.warn('GOOGLE_SERVICE_ACCOUNT_JSON does not contain a valid JSON object (missing { or })');
-      } else {
-        cleaned = cleaned.substring(start, end + 1);
-        
+      // Clean up the string in case it has extra quotes or escaped characters from env
+      serviceAccountJson = serviceAccountJson.trim();
+      if (serviceAccountJson.startsWith("'") && serviceAccountJson.endsWith("'")) {
+        serviceAccountJson = serviceAccountJson.slice(1, -1);
+      }
+      if (serviceAccountJson.startsWith('"') && serviceAccountJson.endsWith('"')) {
         try {
-          const credentials = JSON.parse(cleaned);
-          const auth = new google.auth.GoogleAuth({
-            credentials,
-            scopes: SCOPES,
-          });
-          const client = await auth.getClient();
-          console.log('Using Service Account authentication (Success)');
-          return client;
-        } catch (parseErr: any) {
-          console.error('Failed to parse Service Account JSON:', parseErr.message);
-          // Log only the first 5 chars to help debugging without leaking
-          console.error('JSON starts with:', cleaned.substring(0, 5));
+          // If it's double-quoted, it might be a JSON-stringified string
+          serviceAccountJson = JSON.parse(serviceAccountJson);
+        } catch (e) {
+          // If parse fails, just use the sliced version
+          serviceAccountJson = serviceAccountJson.slice(1, -1);
         }
       }
+
+      const credentials = typeof serviceAccountJson === 'string' ? JSON.parse(serviceAccountJson) : serviceAccountJson;
+      const auth = new google.auth.GoogleAuth({
+        credentials,
+        scopes: SCOPES,
+      });
+      return await auth.getClient();
     } catch (e: any) {
-      console.error('Service Account authentication process failed:', e.message);
+      console.error('Invalid GOOGLE_SERVICE_ACCOUNT_JSON or error getting client:', e.message);
     }
   }
 
-  console.warn('No valid authentication method found');
   return null;
 };
 
@@ -1235,43 +1175,28 @@ app.get('/api/diag', (req, res) => {
 });
 
 // Global Error Handler
+app.use('/api/*', (req, res, next) => {
+  res.status(404).json({ error: `API route not found: ${req.originalUrl}` });
+});
+
 app.use((err: any, req: any, res: any, next: any) => {
-  console.error('Global Error Handler caught error:', err);
+  console.error('Global Error Handler:', err);
   const status = err.status || 500;
   const message = err.message || 'Internal Server Error';
   
-  // More robust check for API routes
-  const isApiRequest = req.path.startsWith('/api') || req.originalUrl.startsWith('/api');
-  
-  if (isApiRequest) {
-    // Ensure we always return JSON for API requests
-    if (!res.headersSent) {
-      res.status(status).json({ 
-        error: message, 
-        code: err.code,
-        path: req.originalUrl
-      });
-    }
+  if (req.path.startsWith('/api')) {
+    res.status(status).json({ error: message, code: err.code });
   } else {
-    if (!res.headersSent) {
-      res.status(status).send(`
-        <html>
-          <head><title>Server Error</title></head>
-          <body style="font-family: sans-serif; padding: 2rem;">
-            <h2 style="color: #e11d48;">Server Error</h2>
-            <p style="color: #4b5563;">${message}</p>
-            <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 1.5rem 0;" />
-            <a href="/" style="color: #4f46e5; text-decoration: none; font-weight: 600;">กลับหน้าหลัก</a>
-          </body>
-        </html>
-      `);
-    }
+    res.status(status).send(`
+      <html>
+        <body>
+          <h2>Server Error</h2>
+          <p style="color: red;">${message}</p>
+          <a href="/">กลับหน้าหลัก</a>
+        </body>
+      </html>
+    `);
   }
-});
-
-// Final 404 handler for API
-app.use('/api/*', (req, res) => {
-  res.status(404).json({ error: `API route not found: ${req.originalUrl}` });
 });
 
 async function startServer() {
