@@ -787,18 +787,7 @@ export default function App() {
                               <p>1. ตรวจสอบว่าคุณมีสิทธิ์เขียน (Editor) ในไฟล์ Google Sheet นี้</p>
                             )}
                             <p>2. ตรวจสอบว่า GOOGLE_SHEET_ID ในการตั้งค่าถูกต้อง</p>
-                            {!isServiceAccount && (
-                              <p>
-                                3.{" "}
-                                <button 
-                                  onClick={handleLogout}
-                                  className="text-amber-200 font-bold underline hover:text-white transition-colors"
-                                >
-                                  ออกจากระบบแล้วเข้าใหม่
-                                </button>
-                                {" "}และตรวจสอบว่าได้เลือกสิทธิ์ "ดูและแก้ไขสเปรดชีต" ครบถ้วน
-                              </p>
-                            )}
+                            {!isServiceAccount && <p>3. ลองออกจากระบบแล้วเข้าใหม่ และตรวจสอบว่าได้เลือกสิทธิ์ "See, edit, create, and delete all your Google Sheets spreadsheets"</p>}
                           </div>
                         )}
                       </div>
@@ -813,16 +802,7 @@ export default function App() {
                         {(result.calendarError.toLowerCase().includes('permission') || result.calendarError.toLowerCase().includes('scope')) && (
                           <div className="mt-2 pt-2 border-t border-amber-400/20 text-xs space-y-1">
                             <p className="font-semibold text-amber-200">วิธีแก้ไข:</p>
-                            <p>
-                              1.{" "}
-                              <button 
-                                onClick={handleLogout}
-                                className="text-amber-200 font-bold underline hover:text-white transition-colors"
-                              >
-                                ออกจากระบบแล้วเข้าใหม่
-                              </button>
-                              {" "}และตรวจสอบว่าได้เลือกสิทธิ์จัดการปฏิทินทั้งหมด
-                            </p>
+                            <p>1. ลองออกจากระบบแล้วเข้าใหม่ และตรวจสอบว่าได้เลือกสิทธิ์จัดการปฏิทินทั้งหมด</p>
                             <p>2. ตรวจสอบว่าบัญชีของคุณมีสิทธิ์สร้างกิจกรรมในปฏิทิน</p>
                           </div>
                         )}

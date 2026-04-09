@@ -554,26 +554,11 @@ app.post('/api/process', upload.single('file'), async (req: any, res) => {
     } catch (sheetErr: any) {
       console.error('Error getting spreadsheet info:', sheetErr.message);
       // If we can't even get the spreadsheet info, it's likely a permission or ID issue
-      if (sheetErr.code === 404) {
-        return res.status(404).json({ 
-          success: false,
-          error: `ไม่พบไฟล์ Google Sheet กรุณาตรวจสอบ GOOGLE_SHEET_ID: ${cleanSpreadsheetId}` 
-        });
-      }
-      if (sheetErr.code === 403) {
-        return res.status(403).json({ 
-          success: false,
-          needsReauth: true,
-          error: `The caller does not have permission: คุณไม่มีสิทธิ์เขียนไฟล์ Google Sheet นี้ หรือยังไม่ได้เลือกสิทธิ์ "ดูและแก้ไขสเปรดชีต" ตอน Login` 
-        });
-      }
+      if (sheetErr.code === 404) throw new Error(`Spreadsheet not found. Please check GOOGLE_SHEET_ID: ${cleanSpreadsheetId}`);
+      if (sheetErr.code === 403) throw new Error(`Permission denied for Spreadsheet. Please share it with the Service Account or ensure you are logged in with the right account.`);
       
       // Fallback to default if it's some other error
-      try {
-        finalWpNumber = await getNextWpNumber(sheets, cleanSpreadsheetId, 'Sheet1');
-      } catch (e) {
-        console.error('Fallback getNextWpNumber failed:', e.message);
-      }
+      finalWpNumber = await getNextWpNumber(sheets, cleanSpreadsheetId, 'Sheet1');
     }
 
     console.log(`Generated final WP number: ${finalWpNumber} using sheet: ${sheetName}`);
@@ -1023,113 +1008,130 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
       }
     }
 
-    // Robust API key detection: try multiple names and validate format
-    const keysToTry = ['GEMINI_API_KEY', 'Gemini_API_Key', 'gemini_api_key', 'API_KEY'];
-    let geminiKey = '';
-    let usedVarName = '';
-    
-    for (const keyName of keysToTry) {
-      const val = process.env[keyName];
-      // Check if value exists, is not a placeholder, and has a reasonable length
-      if (val && typeof val === 'string' && val.trim().length > 10) {
-        const trimmed = val.trim();
-        // Google API keys usually start with 'AIza'
-        if (trimmed.startsWith('AIza')) {
-          geminiKey = trimmed;
-          usedVarName = keyName;
-          break;
-        }
-      }
-    }
-    
     console.log('Starting PDF extraction process...');
-    if (geminiKey) {
-      console.log(`Using Gemini API Key from environment variable: ${usedVarName} (Length: ${geminiKey.length})`);
-    } else {
-      console.log('No valid Gemini API Key found in environment variables.');
-      // Log what we found for debugging (without values)
-      keysToTry.forEach(k => {
-        const v = process.env[k];
-        if (v) console.log(`- Found ${k} but it was invalid or empty (Length: ${v.length})`);
-      });
-    }
-    
     let extractedText = '';
     
-    // If Gemini API Key is available, prioritize it as it's more reliable on Vercel
-    if (geminiKey) {
-      try {
-        console.log('Prioritizing Gemini AI for PDF extraction...');
-        const { GoogleGenAI } = await import('@google/genai');
-        const ai = new GoogleGenAI({ apiKey: geminiKey });
+    try {
+      // Try using pdf-parse first
+      console.log('Attempting to use pdf-parse...');
+      
+      const pdfModule: any = await import('pdf-parse');
+      
+      // Check if it's the new version (Mehmet Kozan's) or the old version
+      if (pdfModule.PDFParse) {
+        console.log('Using new PDFParse API...');
         
-        const result = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: [{
-            parts: [
-              { text: "Extract all text from this PDF document accurately. If it's a scanned document, use OCR to get the text." },
-              { inlineData: { data: dataBuffer.toString('base64'), mimeType: "application/pdf" } }
-            ]
-          }]
-        });
-        
-        extractedText = result.text || '';
-        if (extractedText) {
-          console.log('PDF extracted successfully using Gemini AI, length:', extractedText.length);
-          // If successful, we can skip the local parser
+        // Fix for "Setting up fake worker failed" error
+        try {
+          // Use import.meta.resolve to get the absolute file:// URL
+          // This is the most reliable way in ESM environments like Vercel
+          let workerUrl = '';
+          
+          try {
+            // @ts-ignore - import.meta.resolve is available in Node 20+
+            workerUrl = import.meta.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+            console.log('Resolved PDF worker URL via import.meta.resolve:', workerUrl);
+          } catch (resolveError) {
+            console.warn('import.meta.resolve failed, falling back to manual path construction:', resolveError);
+            
+            const path = await import('path');
+            const fs = await import('fs');
+            const { fileURLToPath } = await import('url');
+            
+            // Get current file directory in ESM
+            const __filename = fileURLToPath(import.meta.url);
+            const __dirname = path.dirname(__filename);
+            
+            // Try to find the worker file in common locations
+            const possibleWorkerPaths = [
+              // Relative to current file (api/index.ts)
+              path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+              path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
+              // Absolute paths
+              path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+              path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
+              // Vercel specific paths
+              '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
+              '/var/task/node_modules/pdfjs-dist/build/pdf.worker.mjs'
+            ];
+            
+            for (const p of possibleWorkerPaths) {
+              try {
+                if (fs.existsSync(p)) {
+                  workerUrl = `file://${p}`;
+                  console.log('Found PDF worker at manual path:', p);
+                  break;
+                }
+              } catch (e) {
+                // Ignore errors for individual path checks
+              }
+            }
+          }
+          
+          if (workerUrl) {
+            // Ensure the URL is properly formatted for pdfjs
+            // If it's already a file:// URL, keep it. If it's an absolute path, add file://
+            if (!workerUrl.startsWith('file://') && !workerUrl.startsWith('http')) {
+              // On Unix-like systems (Vercel), absolute paths start with /
+              // so file://${workerUrl} becomes file:///path/to/worker
+              workerUrl = `file://${workerUrl}`;
+            }
+            
+            console.log('Final PDF worker URL being set:', workerUrl);
+            pdfModule.PDFParse.setWorker(workerUrl);
+          } else {
+            console.warn('Could not find pdf.worker.mjs in any expected location');
+          }
+        } catch (workerSetupError) {
+          console.warn('Error during PDF worker setup:', workerSetupError);
         }
-      } catch (aiError: any) {
-        console.warn('Gemini AI extraction failed, falling back to local parser...', aiError.message);
-      }
-    }
 
-    // If Gemini failed or wasn't available, try local parser
-    if (!extractedText) {
-      try {
-        console.log('Attempting to use local pdfjs-dist parser...');
-        
-        // Use a more robust way to load pdfjs on Vercel
-        const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
-        
-        // Load the PDF document
-        const loadingTask = pdfjs.getDocument({
-          data: new Uint8Array(dataBuffer),
-          disableWorker: true,
-          verbosity: 0
-        });
-        
-        const pdfDocument = await loadingTask.promise;
-        let fullText = '';
-        
-        for (let i = 1; i <= pdfDocument.numPages; i++) {
-          const page = await pdfDocument.getPage(i);
-          const textContent = await page.getTextContent();
-          const pageText = textContent.items
-            .map((item: any) => (item as any).str || '')
-            .join(' ');
-          fullText += pageText + '\n';
-        }
-        
-        extractedText = fullText.trim();
-        console.log('PDF parsed successfully using local pdfjs-dist, length:', extractedText.length);
-      } catch (pdfError: any) {
-        console.error('Local parser also failed:', pdfError.message);
-        
-        if (geminiKey) {
-          throw new Error('ไม่สามารถอ่านไฟล์ PDF ได้ทั้งระบบปกติและ AI: ' + pdfError.message);
+        const parser = new pdfModule.PDFParse({ data: dataBuffer });
+        const result = await parser.getText();
+        extractedText = result.text;
+        await parser.destroy();
+      } else {
+        // Old version or default export is a function
+        const pdf = pdfModule.default || (typeof pdfModule === 'function' ? pdfModule : null);
+        if (typeof pdf === 'function') {
+          console.log('Using legacy pdf-parse function API...');
+          const data = await pdf(dataBuffer);
+          extractedText = typeof data === 'string' ? data : (data as any).text || '';
         } else {
-          throw new Error('ระบบสกัดข้อความปกติขัดข้อง และคุณยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Vercel ให้ถูกต้อง (ชื่อที่แนะนำคือ GEMINI_API_KEY ตัวพิมพ์ใหญ่ทั้งหมด)');
+          throw new Error('PDF parser function/class not found in module');
         }
       }
-    }
-    
-    // Remove the fallback block since it's now integrated above
-    /*
+      
+      console.log('PDF parsed successfully, length:', extractedText.length);
     } catch (pdfError: any) {
       console.warn('pdf-parse failed or could not be initialized, falling back to Gemini AI...', pdfError.message);
-      ...
+      
+      // Fallback to Gemini AI for PDF extraction
+      if (process.env.GEMINI_API_KEY) {
+        try {
+          const { GoogleGenAI } = await import('@google/genai');
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+          
+          const result = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: [{
+              parts: [
+                { text: "Extract all text from this PDF document accurately." },
+                { inlineData: { data: dataBuffer.toString('base64'), mimeType: "application/pdf" } }
+              ]
+            }]
+          });
+          
+          extractedText = result.text || '';
+          console.log('PDF extracted successfully using Gemini AI fallback, length:', extractedText.length);
+        } catch (aiError: any) {
+          console.error('Gemini AI fallback also failed:', aiError.message);
+          throw new Error('ทั้งระบบสกัดข้อความปกติและ AI ไม่สามารถอ่านไฟล์นี้ได้: ' + aiError.message);
+        }
+      } else {
+        throw new Error('ระบบสกัดข้อความปกติขัดข้อง และไม่มี AI Key สำหรับระบบสำรอง: ' + pdfError.message);
+      }
     }
-    */
     
     // Cleanup local file
     if (fs.existsSync(file.path)) {
