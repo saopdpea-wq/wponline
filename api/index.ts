@@ -1228,32 +1228,12 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     // If Gemini failed or wasn't available, try local parser
     if (!extractedText) {
       try {
-        console.log('Attempting to use local pdfjs-dist parser...');
-        
-        // Use a more robust way to load pdfjs on Vercel
-        const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
-        
-        // Load the PDF document
-        const loadingTask = pdfjs.getDocument({
-          data: new Uint8Array(dataBuffer),
-          disableWorker: true,
-          verbosity: 0
-        });
-        
-        const pdfDocument = await loadingTask.promise;
-        let fullText = '';
-        
-        for (let i = 1; i <= pdfDocument.numPages; i++) {
-          const page = await pdfDocument.getPage(i);
-          const textContent = await page.getTextContent();
-          const pageText = textContent.items
-            .map((item: any) => (item as any).str || '')
-            .join(' ');
-          fullText += pageText + '\n';
-        }
-        
-        extractedText = fullText.trim();
-        console.log('PDF parsed successfully using local pdfjs-dist, length:', extractedText.length);
+        console.log('Attempting to use local pdf-parse parser...');
+        const pdfParseModule = await import('pdf-parse');
+        const pdfParse: any = pdfParseModule.default || pdfParseModule;
+        const data = await pdfParse(dataBuffer);
+        extractedText = data.text || '';
+        console.log('PDF parsed successfully using local pdf-parse, length:', extractedText.length);
       } catch (pdfError: any) {
         console.error('Local parser also failed:', pdfError.message);
         
