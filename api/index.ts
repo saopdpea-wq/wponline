@@ -1232,7 +1232,9 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     if (!extractedText) {
       try {
         console.log('Attempting to use local pdf-parse parser...');
-        const pdfParseModule = await import('pdf-parse');
+        // Import the library directly to avoid the debug mode check in index.js
+        // which tries to load a non-existent test file in ESM environments
+        const pdfParseModule = await import('pdf-parse/lib/pdf-parse.js');
         const pdfParse: any = pdfParseModule.default || pdfParseModule;
         const data = await pdfParse(dataBuffer);
         extractedText = data.text || '';
