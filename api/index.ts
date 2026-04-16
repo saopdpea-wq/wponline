@@ -8,6 +8,33 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import fs from 'fs';
 
+// Fix for "DOMMatrix is not defined" error in Node.js for pdfjs-dist 5+
+// This needs to be at the top level before any PDF-related imports
+if (typeof (global as any).DOMMatrix === 'undefined') {
+  try {
+    // Try to get DOMMatrix from @napi-rs/canvas which is a dependency of pdf-parse
+    // Using require for synchronous check if possible, or dynamic import if needed
+    // Since we are in ESM, we use dynamic import but we need to handle it carefully
+    console.log('Polyfilling DOMMatrix for PDF extraction...');
+    (global as any).DOMMatrix = class DOMMatrix {
+      m11 = 1; m12 = 0; m13 = 0; m14 = 0;
+      m21 = 0; m22 = 1; m23 = 0; m24 = 0;
+      m31 = 0; m32 = 0; m33 = 1; m34 = 0;
+      m41 = 0; m42 = 0; m43 = 0; m44 = 1;
+      constructor() {}
+      static fromFloat32Array() { return new DOMMatrix(); }
+      static fromFloat64Array() { return new DOMMatrix(); }
+      multiply() { return this; }
+      inverse() { return this; }
+      translate() { return this; }
+      scale() { return this; }
+      rotate() { return this; }
+    };
+  } catch (e) {
+    console.warn('Failed to polyfill DOMMatrix:', e);
+  }
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -980,34 +1007,6 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
     const dataBuffer = fs.readFileSync(file.path);
     console.log('File read into buffer, length:', dataBuffer.length);
     
-    // Fix for "DOMMatrix is not defined" error in Node.js
-    // We should use a more robust mock or a real polyfill if possible
-    if (typeof (global as any).DOMMatrix === 'undefined') {
-      try {
-        // Try to get DOMMatrix from @napi-rs/canvas which is a dependency of pdf-parse
-        const canvas = await import('@napi-rs/canvas');
-        (global as any).DOMMatrix = (canvas as any).DOMMatrix;
-        console.log('DOMMatrix polyfilled from @napi-rs/canvas');
-      } catch (e) {
-        // Fallback to a slightly better mock if canvas import fails
-        console.warn('Failed to import @napi-rs/canvas for DOMMatrix, using mock');
-        (global as any).DOMMatrix = class DOMMatrix {
-          m11 = 1; m12 = 0; m13 = 0; m14 = 0;
-          m21 = 0; m22 = 1; m23 = 0; m24 = 0;
-          m31 = 0; m32 = 0; m33 = 1; m34 = 0;
-          m41 = 0; m42 = 0; m43 = 0; m44 = 1;
-          constructor() {}
-          static fromFloat32Array() { return new DOMMatrix(); }
-          static fromFloat64Array() { return new DOMMatrix(); }
-          multiply() { return this; }
-          inverse() { return this; }
-          translate() { return this; }
-          scale() { return this; }
-          rotate() { return this; }
-        };
-      }
-    }
-
     console.log('Starting PDF extraction process...');
     let extractedText = '';
     
@@ -1023,57 +1022,63 @@ app.post('/api/extract-pdf', upload.single('file'), async (req: any, res) => {
         
         // Fix for "Setting up fake worker failed" error
         try {
-          // Use import.meta.resolve to get the absolute file:// URL
-          // This is the most reliable way in ESM environments like Vercel
           let workerUrl = '';
           
-          try {
-            // @ts-ignore - import.meta.resolve is available in Node 20+
-            workerUrl = import.meta.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-            console.log('Resolved PDF worker URL via import.meta.resolve:', workerUrl);
-          } catch (resolveError) {
-            console.warn('import.meta.resolve failed, falling back to manual path construction:', resolveError);
-            
-            const path = await import('path');
-            const fs = await import('fs');
-            const { fileURLToPath } = await import('url');
-            
-            // Get current file directory in ESM
-            const __filename = fileURLToPath(import.meta.url);
-            const __dirname = path.dirname(__filename);
-            
-            // Try to find the worker file in common locations
-            const possibleWorkerPaths = [
-              // Relative to current file (api/index.ts)
-              path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
-              path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
-              // Absolute paths
-              path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
-              path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
-              // Vercel specific paths
-              '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
-              '/var/task/node_modules/pdfjs-dist/build/pdf.worker.mjs'
-            ];
-            
-            for (const p of possibleWorkerPaths) {
-              try {
-                if (fs.existsSync(p)) {
-                  workerUrl = `file://${p}`;
-                  console.log('Found PDF worker at manual path:', p);
-                  break;
+          // Try absolute path first for this environment (AI Studio root is /)
+          const absoluteWorkerPath = '/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs';
+          const absoluteWorkerPathAlt = '/node_modules/pdfjs-dist/build/pdf.worker.mjs';
+          
+          if (fs.existsSync(absoluteWorkerPath)) {
+            workerUrl = `file://${absoluteWorkerPath}`;
+            console.log('Using absolute path for PDF worker (legacy):', workerUrl);
+          } else if (fs.existsSync(absoluteWorkerPathAlt)) {
+            workerUrl = `file://${absoluteWorkerPathAlt}`;
+            console.log('Using absolute path for PDF worker (standard):', workerUrl);
+          } else {
+            try {
+              // @ts-ignore - import.meta.resolve is available in Node 20+
+              workerUrl = import.meta.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+              console.log('Resolved PDF worker URL via import.meta.resolve:', workerUrl);
+            } catch (resolveError) {
+              console.warn('import.meta.resolve failed, falling back to manual path construction:', resolveError);
+              
+              const path = await import('path');
+              const { fileURLToPath } = await import('url');
+              
+              // Get current file directory in ESM
+              const __filename = fileURLToPath(import.meta.url);
+              const __dirname = path.dirname(__filename);
+              
+              // Try to find the worker file in common locations
+              const possibleWorkerPaths = [
+                // Relative to current file (api/index.ts)
+                path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+                path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
+                // Absolute paths
+                path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+                path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
+                // Vercel specific paths
+                '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
+                '/var/task/node_modules/pdfjs-dist/build/pdf.worker.mjs'
+              ];
+              
+              for (const p of possibleWorkerPaths) {
+                try {
+                  if (fs.existsSync(p)) {
+                    workerUrl = `file://${p}`;
+                    console.log('Found PDF worker at manual path:', p);
+                    break;
+                  }
+                } catch (e) {
+                  // Ignore errors for individual path checks
                 }
-              } catch (e) {
-                // Ignore errors for individual path checks
               }
             }
           }
           
           if (workerUrl) {
             // Ensure the URL is properly formatted for pdfjs
-            // If it's already a file:// URL, keep it. If it's an absolute path, add file://
             if (!workerUrl.startsWith('file://') && !workerUrl.startsWith('http')) {
-              // On Unix-like systems (Vercel), absolute paths start with /
-              // so file://${workerUrl} becomes file:///path/to/worker
               workerUrl = `file://${workerUrl}`;
             }
             
